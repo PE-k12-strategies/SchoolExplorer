@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PE Dashboard Access</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <main class="page">
+    <section class="card">
+      <h1>Dashboard Access</h1>
+      <p class="subtitle">
+        Sign in to access the Perkins Eastman District Explorer.
+        New accounts require approval from <strong>k12strategies@perkinseastman.com</strong>.
+      </p>
+
+      <div id="auth-section">
+        <div class="tabs">
+          <button type="button" class="tab active" data-tab="signin">Sign In</button>
+          <button type="button" class="tab" data-tab="signup">Request Access</button>
+        </div>
+
+        <form id="signin-form">
+          <label>
+            Email
+            <input type="email" name="email" required autocomplete="email" placeholder="you@perkinseastman.com">
+          </label>
+          <label>
+            Password
+            <input type="password" name="password" required autocomplete="current-password">
+          </label>
+          <button type="submit">Sign In</button>
+        </form>
+
+        <form id="signup-form" class="hidden">
+          <label>
+            Name
+            <input type="text" name="name" required autocomplete="name">
+          </label>
+          <label>
+            Title
+            <select name="title" id="signup-title" required></select>
+          </label>
+          <label>
+            Role
+            <select name="role" id="signup-role" required></select>
+          </label>
+          <label>
+            Email
+            <input type="email" name="email" required autocomplete="email" placeholder="you@perkinseastman.com">
+          </label>
+          <label>
+            Password
+            <input type="password" name="password" required minlength="8" autocomplete="new-password">
+          </label>
+          <button type="submit">Request Access</button>
+        </form>
+      </div>
+
+      <div id="signed-in-section" class="hidden">
+        <div class="status-panel show">
+          <p>Signed in as <strong id="user-email"></strong></p>
+          <p>Name: <strong id="user-name"></strong></p>
+          <p>Title: <span id="user-title"></span></p>
+          <p>Role: <span id="user-role"></span></p>
+          <p>Status: <span id="approval-badge" class="badge"></span></p>
+          <p id="status-message" class="subtitle" style="margin-top: 12px;"></p>
+        </div>
+        <button type="button" class="btn btn-secondary" id="signout-btn" style="margin-top: 16px; width: 100%;">
+          Sign Out
+        </button>
+        <a id="admin-link" href="admin.html" class="btn hidden" style="display: block; text-align: center; margin-top: 12px; text-decoration: none;">
+          Review Pending Requests
+        </a>
+      </div>
+
+      <div id="message" class="message" role="alert"></div>
+    </section>
+  </main>
+
+  <script src="js/config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8"></script>
+  <script>
+    const { createClient } = supabase;
+
+    if (!window.isSupabaseConfigured()) {
+      showMessage(
+        'Supabase API key not set. Open js/config.js and paste your anon public key from Supabase → Project Settings → API.',
+        'error'
+      );
+    }
+
+    const client = createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
+      },
+    });
+
+    const authSection = document.getElementById('auth-section');
+    const signedInSection = document.getElementById('signed-in-section');
+    const messageEl = document.getElementById('message');
+    const signinForm = document.getElementById('signin-form');
+    const signupForm = document.getElementById('signup-form');
+    const tabs = document.querySelectorAll('.tab');
+
+    document.getElementById('signup-title').innerHTML = window.titleOptionsHtml();
+    document.getElementById('signup-role').innerHTML = window.roleOptionsHtml(null, true);
+
+    function formatTitle(value) {
+      const match = window.TITLE_OPTIONS.find((t) => t.value === value);
+      return match ? match.label : value || '—';
+    }
+
+    function showMessage(text, type = 'info') {
+      messageEl.textContent = text;
+      messageEl.className = `message show ${type}`;
+    }
+
+    function clearMessage() {
+      messageEl.className = 'message';
+      messageEl.textContent = '';
+    }
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        tabs.forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        const isSignIn = tab.dataset.tab === 'signin';
+        signinForm.classList.toggle('hidden', !isSignIn);
+        signupForm.classList.toggle('hidden', isSignIn);
+        clearMessage();
+      });
+    });
+
+    let profileInFlight = null;
+    let profileLoadedFor = null;
+
+    async function loadProfile(user) {
+      // Collapse duplicate/concurrent calls (INITIAL_SESSION + SIGNED_IN can both fire on load).
+      if (profileLoadedFor === user.id && !profileInFlight) return;
+      if (profileInFlight) return profileInFlight;
+      profileInFlight = loadProfileInner(user);
+      try {
+        await profileInFlight;
+        profileLoadedFor = user.id;
+      } finally {
+        profileInFlight = null;
+      }
+    }
+
+    async function loadProfileInner(user) {
+      const { data, error } = await client
+        .from('users')
+        .select('Name, Title, E_Mail, Role, approval_status')
+        .eq('auth_user_id', user.id)
+        .single();
+
+      if (error) {
+        showMessage(
+          'Signed in, but your profile is not linked yet. Contact k12strategies@perkinseastman.com.',
+          'warning'
+        );
+        document.getElementById('user-email').textContent = user.email;
+        return;
+      }
+
+      document.getElementById('user-email').textContent = data.E_Mail || user.email;
+      document.getElementById('user-name').textContent = data.Name || '—';
+      document.getElementById('user-title').textContent = formatTitle(data.Title);
+      document.getElementById('user-role').textContent = data.Role || '—';
+
+      const badge = document.getElementById('approval-badge');
+      badge.textContent = data.approval_status;
+      badge.className = `badge ${data.approval_status}`;
+
+      const statusMessage = document.getElementById('status-message');
+      if (data.approval_status === 'pending') {
+        statusMessage.textContent =
+          'Your request is pending. You will be notified once an administrator approves your account.';
+      } else if (data.approval_status === 'approved') {
+        statusMessage.textContent = 'Your account is approved. You can access protected dashboards.';
+      } else {
+        statusMessage.textContent =
+          'Your access request was not approved. Contact k12strategies@perkinseastman.com for help.';
+      }
+
+      const adminLink = document.getElementById('admin-link');
+      if (user.email === window.ADMIN_EMAIL) {
+        adminLink.classList.remove('hidden');
+      } else {
+        adminLink.classList.add('hidden');
+      }
+
+      // Approved users go straight to the NCES explorer (only dashboard).
+      if (data.approval_status === 'approved') {
+        statusMessage.textContent = 'Opening District Explorer…';
+        window.location.replace('nces.html');
+        return;
+      }
+    }
+
+    async function showSignedIn(user) {
+      authSection.classList.add('hidden');
+      signedInSection.classList.remove('hidden');
+      clearMessage();
+      await loadProfile(user);
+    }
+
+    async function showSignedOut() {
+      authSection.classList.remove('hidden');
+      signedInSection.classList.add('hidden');
+    }
+
+    signinForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMessage();
+      const form = new FormData(signinForm);
+
+      const { data, error } = await client.auth.signInWithPassword({
+        email: form.get('email'),
+        password: form.get('password'),
+      });
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return;
+      }
+
+      await showSignedIn(data.user);
+    });
+
+    signupForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMessage();
+      const form = new FormData(signupForm);
+
+      const { data, error } = await client.auth.signUp({
+        email: form.get('email'),
+        password: form.get('password'),
+        options: {
+          data: {
+            name: form.get('name'),
+            title: form.get('title'),
+            role: form.get('role'),
+          },
+        },
+      });
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return;
+      }
+
+      if (data.user && !data.session) {
+        showMessage(
+          'Request submitted. Check your email to confirm your address, then wait for administrator approval.',
+          'success'
+        );
+        signupForm.reset();
+        tabs[0].click();
+        return;
+      }
+
+      if (data.user) {
+        showMessage(
+          'Request submitted. Your account is pending approval from k12strategies@perkinseastman.com.',
+          'success'
+        );
+        await showSignedIn(data.user);
+      }
+    });
+
+    document.getElementById('signout-btn').addEventListener('click', async () => {
+      // Local scope avoids a slow/hanging network round-trip to revoke the token server-side.
+      profileLoadedFor = null;
+      await client.auth.signOut({ scope: 'local' });
+      await showSignedOut();
+      showMessage('Signed out.', 'info');
+    });
+
+    // onAuthStateChange fires an INITIAL_SESSION event on subscribe, so it also
+    // handles the initial page load — no separate getSession() call needed.
+    client.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        await showSignedIn(session.user);
+      } else {
+        profileLoadedFor = null;
+        await showSignedOut();
+      }
+    });
+  </script>
+</body>
+</html>

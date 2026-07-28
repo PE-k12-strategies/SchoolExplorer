@@ -1,0 +1,4 @@
+// Copy to nces-config.local.js and paste your Mapbox public token (pk.…).
+window.NCES_CONFIG = window.NCES_CONFIG || {};
+window.NCES_CONFIG.map = window.NCES_CONFIG.map || {};
+window.NCES_CONFIG.map.token = 'pk.YOUR_MAPBOX_PUBLIC_TOKEN';

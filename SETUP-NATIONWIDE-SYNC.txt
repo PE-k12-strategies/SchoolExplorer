@@ -1,0 +1,54 @@
+NATIONWIDE NCES SYNC — entire United States
+==========================================
+
+Your sync-config.ts is already set to states: ['ALL'].
+
+This loads ~13,000 school districts and all their schools (3 school years each).
+Expect 1–3+ DAYS of runtime. Do NOT close the terminal.
+
+STEP 1 — Discover all districts (names only, ~30–90 minutes)
+-------------------------------------------------------------
+cd nces-sync
+npm run sync -- --discover-only --state ALL
+
+Verify in Supabase SQL Editor:
+  select state_code, count(*) from nces_sync_districts group by state_code order by state_code;
+
+STEP 2 — Sync all data (run overnight; use --resume if interrupted)
+------------------------------------------------------------------
+npm run sync -- --state ALL --skip-discover --resume
+
+If the computer sleeps or the command stops, run the SAME command again.
+--resume skips districts that already have last_synced set.
+
+Routine re-runs (skip districts synced in the last 30 days — default):
+npm run sync -- --state ALL --skip-discover
+
+Force re-sync everything (ignore last_synced):
+npm run sync -- --state ALL --skip-discover --force
+
+Custom freshness window (e.g. 14 days):
+npm run sync -- --state ALL --skip-discover --skip-recent-days 14
+
+MONITOR PROGRESS
+----------------
+Supabase SQL Editor:
+
+  -- Districts completed
+  select count(*) as synced from nces_sync_districts where last_synced is not null;
+
+  -- Total districts
+  select count(*) as total from nces_sync_districts;
+
+  -- Schools loaded
+  select count(*) from nces_school_directory;
+
+STORAGE
+-------
+Nationwide sync will use significant Supabase database storage.
+Check Dashboard → Settings → Usage as it grows.
+
+DASHBOARD
+---------
+After sync, open nces.html — all states appear in the dropdown.
+Pick any state → any district → any year.

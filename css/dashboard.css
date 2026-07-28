@@ -1,0 +1,174 @@
+/* Jeffco room analysis dashboard */
+
+.dashboard-page {
+  max-width: 1280px;
+  padding: 32px 20px 48px;
+}
+
+.dashboard-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.dashboard-header h1 {
+  margin: 0 0 6px;
+  font-size: 1.75rem;
+}
+
+.dashboard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.kpi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px 20px;
+}
+
+.kpi-card .label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+}
+
+.kpi-card .value.is-up {
+  color: #166534;
+}
+
+.kpi-card .value.is-down {
+  color: #991b1b;
+}
+
+.kpi-card .value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.filters-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: visible;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 18px;
+  margin-bottom: 24px;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.panel h2 {
+  margin: 0 0 16px;
+  font-size: 1.05rem;
+}
+
+.chart-wrap {
+  position: relative;
+  height: 320px;
+}
+
+.table-wrap {
+  overflow: auto;
+  max-height: 420px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.data-table th,
+.data-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.data-table th {
+  position: sticky;
+  top: 0;
+  background: #f0f5fa;
+  font-weight: 600;
+  z-index: 1;
+}
+
+.data-table tbody tr:hover {
+  background: #f8fafc;
+}
+
+.data-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.heatmap-cell {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  min-width: 56px;
+}
+
+.heatmap-0 { background: #f8fafc; color: var(--muted); }
+.heatmap-1 { background: #e8f1fb; }
+.heatmap-2 { background: #c5d9f0; }
+.heatmap-3 { background: #8eb5e0; color: #fff; }
+.heatmap-4 { background: #0f4c81; color: #fff; font-weight: 600; }
+
+.gate-card {
+  max-width: 520px;
+  margin: 80px auto;
+}
+
+.loading-overlay {
+  text-align: center;
+  color: var(--muted);
+  padding: 24px;
+  background: #f8fafc;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.loading-overlay.hidden {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .chart-wrap {
+    height: 260px;
+  }
+}

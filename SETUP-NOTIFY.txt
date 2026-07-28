@@ -1,0 +1,56 @@
+SETUP — Signup notifications to k12strategies@perkinseastman.com
+================================================================
+
+Every new signup sends an email to k12strategies@perkinseastman.com (always).
+Approvals are done on admin.html, signed in as that same mailbox.
+
+Uses Office 365 SMTP (internal Perkins Eastman email) — no Resend DNS needed.
+
+
+1. Create a Microsoft app password
+
+   The Edge Function sends mail through your company Office 365 account.
+
+   Option A — use k12strategies@ mailbox (best):
+   - Sign in to k12strategies@perkinseastman.com (or ask IT)
+   - https://mysignins.microsoft.com/security-info
+   - Add sign-in method → App password → copy the password
+
+   Option B — use your own mailbox (d.wieberdink@...):
+   - Create an app password on your account
+   - Mail sends FROM you TO k12strategies@ (internal delivery)
+
+   If app passwords are disabled, ask IT to enable SMTP AUTH for the mailbox
+   or provide a service account for system notifications.
+
+
+2. Redeploy Edge Function
+
+   Supabase Dashboard → Edge Functions → notify-admin-signup
+   Replace code with: supabase/functions/notify-admin-signup/index.ts
+   Deploy
+
+
+3. Set Edge Function secrets
+
+   NOTIFY_SECRET   = pe-notify-8f3k2m9x7q1w5n4r6t
+   SMTP_HOST       = smtp.office365.com
+   SMTP_PORT       = 587
+   SMTP_USER       = k12strategies@perkinseastman.com   (or sender mailbox)
+   SMTP_PASS       = your Microsoft app password
+   SMTP_FROM       = k12strategies@perkinseastman.com
+   ADMIN_PAGE_URL  = full URL to admin.html (optional link in email)
+
+   Remove old Resend secrets (RESEND_API_KEY, FROM_EMAIL) — no longer used.
+
+
+4. Run sql/notify-admin-signup.sql (if not done yet)
+
+   NOTIFY_SECRET must match step 3.
+
+
+5. Test
+
+   - Sign up a test user on index.html
+   - Check k12strategies@perkinseastman.com inbox
+   - Sign in on admin.html as k12strategies@ to approve

@@ -1,0 +1,21 @@
+{
+  "name": "@pe-dashboards/nces-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "tsx src/index.ts",
+    "sync:district": "tsx src/index.ts --district",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.8",
+    "dotenv": "^16.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

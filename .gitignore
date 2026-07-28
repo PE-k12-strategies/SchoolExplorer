@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+supabase/functions/.env
+nces-sync/.env
+js/nces-config.local.js
+
+# Dependencies
+node_modules/
+nces-sync/node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+.cursor/
+*.swp
+*~
+
+# Logs / temp
+*.log
+npm-debug.log*
+_p1.cjs
+scripts/_*.py
+scripts/_*.txt
+supabase/.temp/

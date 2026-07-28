@@ -1,0 +1,8 @@
+[functions.notify-admin-signup]
+verify_jwt = false
+
+[functions.notify-user-update]
+verify_jwt = false
+
+[functions.sync-nces]
+verify_jwt = false

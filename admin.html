@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>User Access Admin</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <main class="page admin-page">
+    <section class="card">
+      <h1>User Access Admin</h1>
+      <p class="subtitle">
+        Manage identification and access for dashboard users.
+        Admin: <strong>k12strategies@perkinseastman.com</strong>
+      </p>
+
+      <div id="gate-section">
+        <p class="subtitle">Sign in with your admin account to continue.</p>
+        <form id="admin-signin-form">
+          <label>
+            Email
+            <input
+              type="email"
+              name="email"
+              required
+              autocomplete="email"
+              placeholder="k12strategies@perkinseastman.com"
+            >
+          </label>
+          <label>
+            Password
+            <input type="password" name="password" required autocomplete="current-password">
+          </label>
+          <button type="submit">Sign In</button>
+        </form>
+        <p style="margin-top: 12px;">
+          <button type="button" class="btn btn-secondary btn-sm" id="show-forgot-btn" style="margin-top: 0;">
+            Forgot password?
+          </button>
+        </p>
+        <form id="forgot-form" class="hidden" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+          <p class="subtitle" style="margin-bottom: 12px;">
+            We will email a reset link. You must open the site at
+            <strong id="app-url-hint"></strong> (not as a local file).
+          </p>
+          <label>
+            Email
+            <input type="email" name="email" required value="k12strategies@perkinseastman.com">
+          </label>
+          <button type="submit">Send reset link</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="cancel-forgot-btn" style="margin-top: 8px;">Cancel</button>
+        </form>
+        <p style="margin-top: 16px;">
+          <a href="index.html">← Back to main page</a>
+        </p>
+      </div>
+
+      <div id="admin-section" class="hidden">
+        <p>Signed in as <strong id="admin-email"></strong></p>
+        <button type="button" class="btn btn-secondary" id="refresh-btn">Refresh</button>
+        <button type="button" class="btn btn-secondary" id="admin-signout-btn">Sign Out</button>
+
+        <h2 class="section-title">Pending requests</h2>
+        <div id="pending-list" class="user-list"></div>
+
+        <h2 class="section-title">Approved users</h2>
+        <p class="section-hint">Update name, title, email, role, or access level below.</p>
+        <div id="approved-list" class="user-list"></div>
+
+        <h2 class="section-title">Rejected</h2>
+        <div id="rejected-list" class="user-list"></div>
+      </div>
+
+      <div id="message" class="message" role="alert"></div>
+    </section>
+  </main>
+
+  <script src="js/config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8"></script>
+  <script>
+    const { createClient } = supabase;
+    const client = createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+
+    const ROLES = window.ROLE_OPTIONS;
+    const STATUSES = ['pending', 'approved', 'rejected'];
+
+    function normalizedTitle(value) {
+      if (value && window.TITLE_OPTIONS.some((t) => t.value === value)) {
+        return value;
+      }
+      return 'untitled';
+    }
+
+    function titleOptions(selected) {
+      return window.titleOptionsHtml(normalizedTitle(selected)).replace(
+        '<option value="">Select a title</option>',
+        ''
+      );
+    }
+
+    function roleOptions(selected) {
+      return window.roleOptionsHtml(selected, false);
+    }
+
+    function formatTitle(value) {
+      const match = window.TITLE_OPTIONS.find((t) => t.value === value);
+      return match ? match.label : value || '—';
+    }
+
+    const gateSection = document.getElementById('gate-section');
+    const adminSection = document.getElementById('admin-section');
+    const messageEl = document.getElementById('message');
+    const pendingList = document.getElementById('pending-list');
+    const approvedList = document.getElementById('approved-list');
+    const rejectedList = document.getElementById('rejected-list');
+
+    if (!window.isSupabaseConfigured()) {
+      messageEl.textContent =
+        'Supabase API key not set. Open js/config.js and paste your anon public key.';
+      messageEl.className = 'message show error';
+    }
+
+    function showMessage(text, type = 'info') {
+      messageEl.textContent = text;
+      messageEl.className = `message show ${type}`;
+    }
+
+    function formatDate(value) {
+      if (!value) return '—';
+      return new Date(value).toLocaleString();
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+    }
+
+    function statusOptions(selected) {
+      return STATUSES.map(
+        (s) => `<option value="${s}"${s === selected ? ' selected' : ''}>${s}</option>`
+      ).join('');
+    }
+
+    function renderUserCard(user) {
+      const card = document.createElement('article');
+      card.className = 'user-card';
+      card.dataset.userId = user.id;
+
+      card.innerHTML = `
+        <div class="user-card-header">
+          <div class="user-meta">
+            <strong>${escapeHtml(user.Name || 'No name')}</strong>
+            <span>${escapeHtml(user.E_Mail)}</span>
+            <span>${escapeHtml(formatTitle(user.Title))} · ${escapeHtml(user.Role)}</span>
+            <span>Requested: ${formatDate(user.created_at)}</span>
+            ${user.approved_at ? `<span>Last updated: ${formatDate(user.approved_at)}</span>` : ''}
+            ${!user.auth_user_id ? '<span class="warn-text">Not linked to login yet</span>' : ''}
+          </div>
+          <span class="badge ${user.approval_status}">${user.approval_status}</span>
+        </div>
+
+        <div class="user-card-view">
+          <button type="button" class="btn btn-secondary btn-sm edit-btn">Edit user</button>
+          ${user.approval_status === 'pending' ? `
+            <button type="button" class="btn btn-success btn-sm quick-approve-btn">Approve</button>
+            <button type="button" class="btn btn-danger btn-sm quick-reject-btn">Reject</button>
+          ` : ''}
+        </div>
+
+        <form class="user-edit-form hidden">
+          <div class="edit-grid">
+            <label>
+              Name
+              <input type="text" name="name" value="${escapeHtml(user.Name || '')}" required>
+            </label>
+            <label>
+              Title
+              <select name="title" required>${titleOptions(user.Title)}</select>
+            </label>
+            <label>
+              Email
+              <input type="email" name="email" value="${escapeHtml(user.E_Mail || '')}" required>
+            </label>
+            <label>
+              Role
+              <select name="role" required>${roleOptions(user.Role)}</select>
+            </label>
+            <label>
+              Access level
+              <select name="status" required>${statusOptions(user.approval_status)}</select>
+            </label>
+          </div>
+          <div class="user-actions">
+            <button type="submit" class="btn btn-success btn-sm">Save changes</button>
+            <button type="button" class="btn btn-secondary btn-sm cancel-btn">Cancel</button>
+          </div>
+        </form>
+      `;
+
+      const view = card.querySelector('.user-card-view');
+      const form = card.querySelector('.user-edit-form');
+      const editBtn = card.querySelector('.edit-btn');
+      const cancelBtn = card.querySelector('.cancel-btn');
+
+      editBtn.addEventListener('click', () => {
+        view.classList.add('hidden');
+        form.classList.remove('hidden');
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        form.classList.add('hidden');
+        view.classList.remove('hidden');
+      });
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const saveBtn = form.querySelector('button[type="submit"]');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+
+        try {
+          const fd = new FormData(form);
+          const ok = await saveUser(user.id, {
+            name: fd.get('name'),
+            title: fd.get('title'),
+            email: fd.get('email'),
+            role: fd.get('role'),
+            status: fd.get('status'),
+          }, user);
+
+          if (ok) {
+            form.classList.add('hidden');
+            view.classList.remove('hidden');
+          }
+        } catch (err) {
+          showMessage(err.message || 'Save failed.', 'error');
+        } finally {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save changes';
+        }
+      });
+
+      const approveBtn = card.querySelector('.quick-approve-btn');
+      if (approveBtn) {
+        approveBtn.addEventListener('click', () => quickStatus(user.id, 'approved'));
+      }
+
+      const rejectBtn = card.querySelector('.quick-reject-btn');
+      if (rejectBtn) {
+        rejectBtn.addEventListener('click', () => quickStatus(user.id, 'rejected'));
+      }
+
+      return card;
+    }
+
+    function buildChanges(before, after) {
+      const fields = [
+        { key: 'Name', label: 'Name' },
+        { key: 'Title', label: 'Title', format: formatTitle },
+        { key: 'E_Mail', label: 'Email' },
+        { key: 'Role', label: 'Role' },
+        { key: 'approval_status', label: 'Access level' },
+      ];
+
+      return fields.reduce((changes, field) => {
+        const oldVal = before[field.key];
+        const newVal = after[field.key];
+        if (oldVal !== newVal) {
+          changes.push({
+            field: field.label,
+            old_value: field.format ? field.format(oldVal) : (oldVal ?? '—'),
+            new_value: field.format ? field.format(newVal) : (newVal ?? '—'),
+          });
+        }
+        return changes;
+      }, []);
+    }
+
+    function showNotifyResult(result, email) {
+      if (result.skipped) {
+        showMessage('User updated.', 'success');
+      } else if (result.ok && result.forwarded) {
+        showMessage(
+          `Saved. Could not email ${email} directly — copy sent to ${result.delivered_to} to forward.`,
+          'warning'
+        );
+      } else if (result.ok) {
+        showMessage(`Saved. Email sent to ${email} with a summary of changes.`, 'success');
+      } else {
+        showMessage(`Saved, but email failed: ${result.error}`, 'warning');
+      }
+    }
+
+    async function notifyUserChange(before, after, updatedBy) {
+      const changes = buildChanges(before, after);
+      if (changes.length === 0) {
+        return { ok: true, skipped: true };
+      }
+
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) return { ok: false, error: 'Not signed in' };
+
+        const res = await fetch(
+          `${window.SUPABASE_URL}/functions/v1/notify-user-update`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              name: after.Name,
+              email: after.E_Mail,
+              updated_by: updatedBy,
+              changes,
+            }),
+          }
+        );
+
+        if (!res.ok) {
+          return { ok: false, error: await res.text() };
+        }
+
+        return await res.json();
+      } catch (err) {
+        return { ok: false, error: err.message || 'Email request failed' };
+      }
+    }
+
+    async function quickStatus(userId, status) {
+      const { data: { user } } = await client.auth.getUser();
+      if (!user) return;
+
+      const { data: beforeUser, error: fetchError } = await client
+        .from('users')
+        .select('Name, Title, E_Mail, Role, approval_status')
+        .eq('id', userId)
+        .single();
+
+      if (fetchError) {
+        showMessage(fetchError.message, 'error');
+        return;
+      }
+
+      const { error } = await client
+        .from('users')
+        .update({
+          approval_status: status,
+          approved_at: new Date().toISOString(),
+          approved_by: user.email,
+        })
+        .eq('id', userId);
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return;
+      }
+
+      const afterUser = { ...beforeUser, approval_status: status };
+      const result = await notifyUserChange(beforeUser, afterUser, user.email);
+      showNotifyResult(result, afterUser.E_Mail);
+      await loadUsers();
+    }
+
+    async function saveUser(userId, fields, beforeUser) {
+      const { data: { user } } = await client.auth.getUser();
+      if (!user) {
+        showMessage('Session expired. Sign in again.', 'error');
+        return false;
+      }
+
+      const afterUser = {
+        Name: String(fields.name).trim(),
+        Title: String(fields.title).trim(),
+        E_Mail: String(fields.email).trim(),
+        Role: String(fields.role).trim(),
+        approval_status: String(fields.status).trim(),
+      };
+
+      if (!afterUser.Name || !afterUser.Title || !afterUser.E_Mail || !afterUser.Role) {
+        showMessage('All fields are required.', 'error');
+        return false;
+      }
+
+      const changes = buildChanges(beforeUser, afterUser);
+      if (changes.length === 0) {
+        showMessage('No changes to save.', 'info');
+        return false;
+      }
+
+      const { error } = await client
+        .from('users')
+        .update({
+          ...afterUser,
+          approved_at: new Date().toISOString(),
+          approved_by: user.email,
+        })
+        .eq('id', userId);
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return false;
+      }
+
+      const result = await notifyUserChange(beforeUser, afterUser, user.email);
+      showNotifyResult(result, afterUser.E_Mail);
+      await loadUsers();
+      return true;
+    }
+
+    function renderList(container, users, emptyText) {
+      container.innerHTML = '';
+      if (users.length === 0) {
+        container.innerHTML = `<p class="empty-state">${emptyText}</p>`;
+        return;
+      }
+      users.forEach((u) => container.appendChild(renderUserCard(u)));
+    }
+
+    async function loadUsers() {
+      const { data, error } = await client
+        .from('users')
+        .select('id, Name, Title, E_Mail, Role, approval_status, created_at, approved_at, approved_by, auth_user_id')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return;
+      }
+
+      const pending = data.filter((u) => u.approval_status === 'pending');
+      const approved = data.filter((u) => u.approval_status === 'approved');
+      const rejected = data.filter((u) => u.approval_status === 'rejected');
+
+      renderList(pendingList, pending, 'No pending requests.');
+      renderList(approvedList, approved, 'No approved users yet.');
+      renderList(rejectedList, rejected, 'No rejected users.');
+    }
+
+    async function showAdmin(user) {
+      if (user.email !== window.ADMIN_EMAIL) {
+        await client.auth.signOut();
+        showMessage('This page is restricted to the approval administrator.', 'error');
+        return;
+      }
+
+      gateSection.classList.add('hidden');
+      adminSection.classList.remove('hidden');
+      document.getElementById('admin-email').textContent = user.email;
+      await loadUsers();
+    }
+
+    function showGate() {
+      gateSection.classList.remove('hidden');
+      adminSection.classList.add('hidden');
+    }
+
+    document.getElementById('admin-signin-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+
+      const { data, error } = await client.auth.signInWithPassword({
+        email: form.get('email'),
+        password: form.get('password'),
+      });
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return;
+      }
+
+      await showAdmin(data.user);
+    });
+
+    document.getElementById('app-url-hint').textContent = window.getAppUrl('');
+
+    document.getElementById('show-forgot-btn').addEventListener('click', () => {
+      document.getElementById('forgot-form').classList.remove('hidden');
+    });
+
+    document.getElementById('cancel-forgot-btn').addEventListener('click', () => {
+      document.getElementById('forgot-form').classList.add('hidden');
+    });
+
+    document.getElementById('forgot-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = new FormData(e.target).get('email');
+      const redirectTo = window.getAppUrl('reset-password.html');
+
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return;
+      }
+
+      showMessage(
+        `Reset link sent to ${email}. Open the link while this site is running at ${redirectTo.replace('/reset-password.html', '')}`,
+        'success'
+      );
+    });
+
+    document.getElementById('refresh-btn').addEventListener('click', loadUsers);
+
+    document.getElementById('admin-signout-btn').addEventListener('click', async () => {
+      await client.auth.signOut();
+      showGate();
+      showMessage('Signed out.', 'info');
+    });
+
+    client.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.user) {
+        await showAdmin(session.user);
+      }
+    });
+  </script>
+</body>
+</html>

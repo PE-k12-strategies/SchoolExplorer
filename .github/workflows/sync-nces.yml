@@ -1,0 +1,42 @@
+name: Sync NCES data
+
+on:
+  workflow_dispatch:
+    inputs:
+      leaid:
+        description: 'NCES LEA ID (optional, default all enabled)'
+        required: false
+        default: ''
+  schedule:
+    # Weekly Sunday 6:00 UTC
+    - cron: '0 6 * * 0'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nces-sync
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: nces-sync/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run NCES sync
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -n "${{ github.event.inputs.leaid }}" ]; then
+            npm run sync -- --district "${{ github.event.inputs.leaid }}"
+          else
+            npm run sync
+          fi

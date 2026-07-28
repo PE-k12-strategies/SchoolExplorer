@@ -1,0 +1,60 @@
+NCES MAP — setup
+================
+
+The NCES Explorer now has a "Map" tab with three layers: States, Districts, Schools.
+It uses Mapbox GL JS and reads aggregated data from Supabase RPCs.
+
+STEP 1 — Run the SQL migration
+------------------------------
+Open Supabase SQL Editor:
+  https://supabase.com/dashboard/project/jmmrsetieidkwycnfvkm/sql/new
+
+Paste the ENTIRE contents of:
+  sql/migrations/004_nces_map.sql
+Click Run.
+
+This does three things:
+  1. Adds latitude/longitude columns to nces_school_directory.
+  2. Backfills those columns from the stored raw API data (no re-sync needed
+     if your schools were synced with coordinates in raw_data).
+  3. Creates 3 functions the map calls:
+       - nces_map_state_summary(year)
+       - nces_map_district_points(state, year)
+       - nces_map_school_points(state, leaid, year)
+
+STEP 2 — Confirm coordinates exist
+----------------------------------
+In the SQL Editor:
+  select count(*) as with_coords
+  from public.nces_school_directory
+  where latitude is not null;
+
+If with_coords is 0, your raw_data did not include latitude/longitude.
+Re-run the sync for the affected districts (the sync now stores coordinates):
+  cd nces-sync
+  npm run sync -- --state CO --skip-discover --force
+
+STEP 3 — Open the dashboard
+---------------------------
+  http://localhost:3000/nces.html  (sign in as an approved user first)
+Click the "Map" tab.
+
+HOW IT BEHAVES
+--------------
+- No state selected  -> States layer shows one circle per state that has data
+                        (enrollment / #districts / #schools in the popup).
+- State selected     -> Districts + Schools layers load for that state.
+- District selected  -> Schools zoom to that district.
+- Use the Layers box (top-left) to toggle States / Districts / Schools.
+- Click a state circle to zoom in; click a district circle to open it.
+- School circles are colored by type (Elementary/Middle/High/Other),
+  sized by enrollment.
+
+NOTES / LIMITATIONS
+-------------------
+- Districts and Schools only load once a State is selected (nationwide points
+  would be too many to draw at once).
+- State/District markers are points (circles), not filled boundary polygons.
+  Polygon boundaries (Census TIGER) can be added later if desired.
+- Mapbox token: copy js/nces-config.local.js.example → js/nces-config.local.js
+  and set map.token to your Mapbox public token (pk.…). That file is gitignored.

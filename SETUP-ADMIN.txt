@@ -1,0 +1,40 @@
+CREATE THE K12 ADMIN ACCOUNT (5 minutes, no Outlook needed)
+============================================================
+
+k12strategies@perkinseastman.com is the approver. You do NOT need a Microsoft
+mailbox or Outlook password. You create a login in Supabase instead.
+
+
+STEP 1 — Create the admin login in Supabase
+--------------------------------------------
+1. Open: https://supabase.com/dashboard/project/jmmrsetieidkwycnfvkm/auth/users
+2. Click "Add user" → "Create new user"
+3. Email:    k12strategies@perkinseastman.com
+4. Password: choose one and save it (this is ONLY for admin.html — not Outlook)
+5. Turn ON "Auto Confirm User"
+6. Create user
+
+
+STEP 2 — Link to your users table (SQL Editor)
+-----------------------------------------------
+Run sql/setup-k12-admin.sql then sql/link-admin.sql
+
+
+STEP 3 — Sign in on admin.html
+-------------------------------
+Email:    k12strategies@perkinseastman.com
+Password: the password you chose in Step 1
+
+
+EMAIL ALERTS (separate from admin login)
+-----------------------------------------
+Until k12strategies@ has a real mailbox, signup alerts go to YOUR email
+(d.wieberdink@...) via Resend. The email says to sign in as k12strategies@ on
+admin.html.
+
+Edge Function secrets (Dashboard → notify-admin-signup → Secrets):
+  RESEND_API_KEY = your Resend key
+  NOTIFY_SECRET  = pe-notify-8f3k2m9x7q1w5n4r6t
+  NOTIFY_EMAIL   = d.wieberdink@perkinseastman.com
+
+When k12strategies@ mailbox exists, change NOTIFY_EMAIL to k12strategies@...
