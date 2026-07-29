@@ -299,6 +299,7 @@
         email: form.get('email'),
         password: form.get('password'),
         options: {
+          emailRedirectTo: window.getAppUrl('index.html'),
           data: {
             name: form.get('name'),
             title: form.get('title'),

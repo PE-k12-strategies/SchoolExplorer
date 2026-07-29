@@ -35,12 +35,10 @@ window.roleOptionsHtml = function (selected, includeBlank) {
   return blank + opts;
 };
 
-// Base URL where these HTML files are served (required for password reset emails).
-// Examples:
-//   Local:  http://localhost:5500
-//   Hosted: https://your-site.perkinseastman.com/dashboards
-// Leave empty to auto-detect when not opening as a local file.
-window.APP_BASE_URL = '';
+// Base URL where these HTML files are served (required for auth / password-reset emails).
+// Must also be listed under Supabase → Authentication → URL Configuration
+// (Site URL + Redirect URLs).
+window.APP_BASE_URL = 'https://pe-k12-strategies.github.io/SchoolExplorer';
 
 window.getAppUrl = function (page) {
   const file = page || 'index.html';
