@@ -23,8 +23,8 @@ window.NCES_CONFIG = {
   /** Years offered in the year filter (unioned with whatever each district has synced). */
   schoolYears: [2015, 2020, 2021, 2022, 2023, 2024],
   map: {
-    /** Set via js/nces-config.local.js (gitignored). See nces-config.local.js.example. */
-    token: '',
+    /** Public Mapbox token (pk.). Restrict URLs in the Mapbox account dashboard. */
+    token: 'pk.eyJ1IjoiazEyc3RyYXRlZ2llcyIsImEiOiJjbXM2NHo3dWcwMnRxMnpxNGR6NHFha2YyIn0.yQt4nwsflBdLSko1TCEwdw',
     style: 'mapbox://styles/mapbox/light-v11',
     center: [-98.5, 39.5],
     zoom: 3.4,
