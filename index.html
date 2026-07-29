@@ -33,6 +33,24 @@
           <button type="submit">Sign In</button>
         </form>
 
+        <p id="forgot-toggle-wrap" style="margin-top: 12px;">
+          <button type="button" class="btn btn-secondary btn-sm" id="show-forgot-btn" style="margin-top: 0;">
+            Forgot password?
+          </button>
+        </p>
+        <form id="forgot-form" class="hidden" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+          <p class="subtitle" style="margin-bottom: 12px;">
+            We will email a reset link. Open it while this site is running at
+            <strong id="app-url-hint"></strong> (not as a local file).
+          </p>
+          <label>
+            Email
+            <input type="email" name="email" required autocomplete="email" placeholder="you@perkinseastman.com">
+          </label>
+          <button type="submit">Send reset link</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="cancel-forgot-btn" style="margin-top: 8px;">Cancel</button>
+        </form>
+
         <form id="signup-form" class="hidden">
           <label>
             Name
@@ -104,10 +122,14 @@
     const messageEl = document.getElementById('message');
     const signinForm = document.getElementById('signin-form');
     const signupForm = document.getElementById('signup-form');
+    const forgotForm = document.getElementById('forgot-form');
+    const forgotToggleWrap = document.getElementById('forgot-toggle-wrap');
     const tabs = document.querySelectorAll('.tab');
 
     document.getElementById('signup-title').innerHTML = window.titleOptionsHtml();
     document.getElementById('signup-role').innerHTML = window.roleOptionsHtml(null, true);
+    document.getElementById('app-url-hint').textContent =
+      window.getAppUrl('').replace(/\/$/, '') || 'http://localhost:3000';
 
     function formatTitle(value) {
       const match = window.TITLE_OPTIONS.find((t) => t.value === value);
@@ -124,6 +146,10 @@
       messageEl.textContent = '';
     }
 
+    function hideForgotForm() {
+      forgotForm.classList.add('hidden');
+    }
+
     tabs.forEach((tab) => {
       tab.addEventListener('click', () => {
         tabs.forEach((t) => t.classList.remove('active'));
@@ -131,6 +157,8 @@
         const isSignIn = tab.dataset.tab === 'signin';
         signinForm.classList.toggle('hidden', !isSignIn);
         signupForm.classList.toggle('hidden', isSignIn);
+        forgotToggleWrap.classList.toggle('hidden', !isSignIn);
+        hideForgotForm();
         clearMessage();
       });
     });
@@ -230,6 +258,36 @@
       }
 
       await showSignedIn(data.user);
+    });
+
+    document.getElementById('show-forgot-btn').addEventListener('click', () => {
+      forgotForm.classList.remove('hidden');
+      const email = new FormData(signinForm).get('email');
+      if (email) forgotForm.querySelector('input[name="email"]').value = email;
+    });
+
+    document.getElementById('cancel-forgot-btn').addEventListener('click', () => {
+      hideForgotForm();
+      clearMessage();
+    });
+
+    forgotForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMessage();
+      const email = new FormData(e.target).get('email');
+      const redirectTo = window.getAppUrl('reset-password.html');
+
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return;
+      }
+
+      showMessage(
+        `Reset link sent to ${email}. Open the link while this site is running at ${redirectTo.replace('/reset-password.html', '')}`,
+        'success'
+      );
     });
 
     signupForm.addEventListener('submit', async (e) => {

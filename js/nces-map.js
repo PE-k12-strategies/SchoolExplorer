@@ -666,11 +666,14 @@
         reject(new Error('Mapbox GL failed to load.'));
         return;
       }
-      if (!CFG.token) {
-        reject(new Error('Missing Mapbox token in nces-config.js.'));
+      const token = (global.NCES_CONFIG && global.NCES_CONFIG.map && global.NCES_CONFIG.map.token) || CFG.token;
+      if (!token) {
+        reject(new Error(
+          'Missing Mapbox token. Copy js/nces-config.local.js.example to js/nces-config.local.js and set map.token.'
+        ));
         return;
       }
-      global.mapboxgl.accessToken = CFG.token;
+      global.mapboxgl.accessToken = token;
       let settled = false;
       const fail = (err) => {
         if (settled) return;
