@@ -3055,12 +3055,90 @@
       if (!f.properties) f.properties = {};
       const code = f.properties.stusab || f.properties.STUSAB;
       const s = code ? stateSummaryByCode[code] : null;
-      f.properties.enrollment = s ? Number(s.enrollment) || 0 : 0;
-      f.properties.teachers_fte = s ? Number(s.teachers_fte) || 0 : 0;
-      f.properties.staff_fte = s ? Number(s.staff_fte) || 0 : 0;
-      f.properties.stu_teacher = s ? (stuTeacher(s.enrollment, s.teachers_fte) || 0) : 0;
+      const enrollment = s ? Number(s.enrollment) || 0 : 0;
+      const teachers = s ? Number(s.teachers_fte) || 0 : 0;
+      const staff = s ? Number(s.staff_fte) || 0 : 0;
+      f.properties.enrollment = enrollment;
+      f.properties.teachers_fte = teachers;
+      f.properties.staff_fte = staff;
+      f.properties.stu_teacher = stuTeacher(enrollment, teachers) || 0;
     });
     setStateOutlineData(allStatesFc);
+  }
+
+  function stateSummaryHasFte() {
+    return Object.values(stateSummaryByCode).some(
+      (s) => (Number(s.teachers_fte) || 0) > 0 || (Number(s.staff_fte) || 0) > 0
+    );
+  }
+
+  let stateFteLoadKey = null;
+  let stateFteLoading = false;
+
+  /**
+   * Enrollment comes from nces_map_state_summary; teachers/staff often do not
+   * (older RPC without FTE columns, or empty teachers_total_fte). Change Color-by
+   * works because it uses nces_map_state_metric_change — reuse that for FTE.
+   */
+  async function ensureStateFteMetrics() {
+    if (!client || !map) return;
+    const year = resolveMetricYear();
+    const key = String(year);
+    if (stateSummaryHasFte()) {
+      if (stateFteLoadKey !== key) stateFteLoadKey = key;
+      applyStateMetrics();
+      if (colorMetric === 'teachers' || colorMetric === 'staff' || colorMetric === 'ratio') {
+        applyMetricPaint();
+        applyVisibility();
+      }
+      return;
+    }
+    if (stateFteLoading) return;
+    stateFteLoading = true;
+    try {
+      let rows = null;
+      try {
+        rows = await rpc('nces_map_state_metric_change', {
+          p_year_from: year,
+          p_year_to: year,
+        });
+      } catch (_) {
+        try {
+          rows = await rpc('nces_map_state_enrollment_change', {
+            p_year_from: year,
+            p_year_to: year,
+          });
+        } catch (__) {
+          rows = null;
+        }
+      }
+      (rows || []).forEach((r) => {
+        const code = r.state_code;
+        if (!code) return;
+        if (!stateSummaryByCode[code]) {
+          stateSummaryByCode[code] = {
+            districts: Number(r.districts) || 0,
+            schools: 0,
+            enrollment: 0,
+            teachers_fte: 0,
+            staff_fte: 0,
+          };
+        }
+        const cur = stateSummaryByCode[code];
+        const enroll = Number(r.enrollment_to) || Number(r.enrollment_from) || 0;
+        if (enroll > 0) cur.enrollment = enroll;
+        cur.teachers_fte = Number(r.teachers_to) || Number(r.teachers_from) || 0;
+        cur.staff_fte = Number(r.staff_to) || Number(r.staff_from) || 0;
+      });
+      stateFteLoadKey = key;
+      applyStateMetrics();
+      if (colorMetric === 'teachers' || colorMetric === 'staff' || colorMetric === 'ratio') {
+        applyMetricPaint();
+        applyVisibility();
+      }
+    } finally {
+      stateFteLoading = false;
+    }
   }
 
   // metric: null/'off' | 'enrollment' | 'teachers' | 'staff' | 'ratio' | 'change'
@@ -3099,6 +3177,10 @@
       // Belt-and-suspenders: force choropleth on after Off → metric.
       if (map.getLayer('states-choropleth-fill') && visibility.states) {
         map.setLayoutProperty('states-choropleth-fill', 'visibility', 'visible');
+      }
+      // Teachers / staff / ratio need FTE — load from metric_change if summary lacks them.
+      if (colorMetric === 'teachers' || colorMetric === 'staff' || colorMetric === 'ratio') {
+        ensureStateFteMetrics().catch(() => {});
       }
       refreshColorScope();
       return;
