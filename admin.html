@@ -490,7 +490,9 @@
     document.getElementById('forgot-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const email = new FormData(e.target).get('email');
-      const redirectTo = window.getAppUrl('reset-password.html');
+      const redirectTo = window.getAuthRedirectUrl
+        ? window.getAuthRedirectUrl('reset-password.html')
+        : window.getAppUrl('reset-password.html');
 
       const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
 
@@ -500,7 +502,7 @@
       }
 
       showMessage(
-        `Reset link sent to ${email}. Open the link while this site is running at ${redirectTo.replace('/reset-password.html', '')}`,
+        `Reset link sent to ${email}. Open it on ${redirectTo.replace(/\/reset-password\.html$/, '')}`,
         'success'
       );
     });

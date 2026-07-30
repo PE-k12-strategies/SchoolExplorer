@@ -2631,9 +2631,10 @@ body.is-resizing-detail .map-detail-panel {
 
 .map-grade-change-row {
   display: grid;
-  grid-template-columns: 28px 1fr 72px 36px;
+  /* minmax keeps grade rows aligned and fits Tot values like 140,604→144,783. */
+  grid-template-columns: 28px minmax(0, 1fr) minmax(7.75rem, max-content) minmax(3.4rem, max-content);
   align-items: center;
-  gap: 6px;
+  gap: 6px 8px;
   margin: 3px 0;
 }
 
@@ -2697,6 +2698,7 @@ body.is-resizing-detail .map-detail-panel {
   font-variant-numeric: tabular-nums;
   color: var(--text);
   text-align: right;
+  white-space: nowrap;
 }
 
 .map-grade-delta {
@@ -2704,6 +2706,8 @@ body.is-resizing-detail .map-detail-panel {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: right;
+  white-space: nowrap;
+  min-width: 3.25rem;
 }
 
 .map-grade-delta.is-up {

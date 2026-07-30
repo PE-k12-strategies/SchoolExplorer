@@ -473,9 +473,10 @@
     const data = new Uint8ClampedArray(s * s * 4);
     const cx = (s - 1) / 2;
     const cy = (s - 1) / 2;
-    // Leave padding so icon-halo is not clipped.
-    const r = s * 0.28;
-    const spread = 8;
+    // Generous padding — Mapbox clips icon-halo to the square texture; a large
+    // circle leaves a visible square rim. Keep the glyph small in the canvas.
+    const r = s * 0.22;
+    const spread = 10;
     const cutoff = 192;
 
     function insideAt(x, y) {
@@ -564,15 +565,16 @@
    * Icon size always tracks enrollment (× zoom). Selected school is larger.
    * Values are multipliers on the ~21 CSS-px glyph.
    */
-  function schoolIconSizeExpr() {
+  function schoolIconSizeExpr(factor) {
+    const f = Number(factor) > 0 ? Number(factor) : 1;
     const id = selectedSchoolId();
     const byEnroll = (lo, hi) => {
       const expr = [
         'interpolate', ['linear'],
         ['sqrt', ['max', ['coalesce', ['get', 'enrollment'], 0], 0]],
-        0, lo,
-        20, (lo + hi) * 0.55,
-        50, hi,
+        0, lo * f,
+        20, (lo + hi) * 0.55 * f,
+        50, hi * f,
       ];
       if (!id) return expr;
       return [
@@ -1173,6 +1175,24 @@
         'circle-stroke-width': 0,
       },
     });
+    // Larger circle behind the fill = circular school-type rim (avoids square SDF halos).
+    addIfMissing({
+      id: 'schools-rings',
+      type: 'symbol',
+      source: 'schools',
+      layout: {
+        visibility: 'none',
+        'icon-image': SCHOOL_CIRCLE_ICON,
+        'icon-size': schoolIconSizeExpr(1.38),
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+      paint: {
+        'icon-color': schoolLevelColorExpr(),
+        'icon-opacity': 0.95,
+        'icon-halo-width': 0,
+      },
+    });
     addIfMissing({
       id: 'schools-circles',
       type: 'symbol',
@@ -1187,13 +1207,11 @@
       paint: {
         'icon-color': schoolLevelColorExpr(),
         'icon-opacity': 0.95,
-        // Default: school-type mode — no ring (halo width 0).
-        'icon-halo-color': '#ffffff',
+        // No icon-halo — Mapbox clips halos to the square texture bounds.
         'icon-halo-width': 0,
-        'icon-halo-blur': 0.1,
       },
     });
-    // School names — only when zoomed to ~1 mile (z14+); hide if they collide.
+    // School names — from ~3000 ft view distance; hide if they collide.
     addIfMissing({
       id: 'schools-labels',
       type: 'symbol',
@@ -2080,7 +2098,7 @@
   function wireInteractions() {
     const hoverLayers = [
       'state-fill-hit', 'districts-hit', 'districts-all-hit',
-      'schools-circles', 'schools-dots', 'hs-areas-fill', 'district-regions-fill',
+      'schools-circles', 'schools-rings', 'schools-dots', 'hs-areas-fill', 'district-regions-fill',
     ];
     hoverLayers.forEach((layer) => {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
@@ -2122,7 +2140,7 @@
         }
       }
 
-      const school = q(['schools-circles', 'schools-dots']);
+      const school = q(['schools-circles', 'schools-rings', 'schools-dots']);
       if (school.length) { schoolPopup(school[0].properties, e.lngLat); return; }
 
       if (map.getZoom() >= STATE_ZOOM) {
@@ -2185,6 +2203,31 @@
     if (base && ch) return Object.assign(base, ch);
     if (ch) return Object.assign({ leaid: id }, ch);
     return base;
+  }
+
+  /**
+   * Schools currently matching map filters (level checkboxes + size range)
+   * within the selected district(s) / state(s). null when markers are not loaded.
+   */
+  function filteredSchoolsInSelection() {
+    const rows = lastData.schools || [];
+    if (!rows.length) return null;
+    if (!selectedDistricts.size && !selectedStates.size) return null;
+    const leaSet = selectedDistricts.size
+      ? new Set([...selectedDistricts].map((id) => padLeaid(id)))
+      : null;
+    return rows.filter((r) => {
+      if (leaSet) {
+        if (!leaSet.has(padLeaid(r.leaid))) return false;
+      } else if (selectedStates.size) {
+        const st = stateForLeaid(r.leaid) || r.state_location;
+        if (!st || !selectedStates.has(st)) return false;
+      }
+      const level = Number(r.school_level) || 4;
+      if (!schoolLevels.has(level)) return false;
+      if (!enrollmentInRange(r.enrollment, 'schools')) return false;
+      return true;
+    });
   }
 
   function selectionSummary() {
@@ -2254,7 +2297,24 @@
       districts = selectedDistricts.size;
     }
 
-    const haveData = haveState || haveDist;
+    // Prefer count of map-visible schools (level / size filters) when markers are loaded.
+    const visibleSchools = filteredSchoolsInSelection();
+    if (visibleSchools) {
+      schools = visibleSchools.length;
+      // Per-district list counts should match the same filters.
+      if (selectedDistricts.size && !selectedStates.size) {
+        const byLea = new Map();
+        visibleSchools.forEach((r) => {
+          const id = padLeaid(r.leaid);
+          byLea.set(id, (byLea.get(id) || 0) + 1);
+        });
+        districtList.forEach((d) => {
+          d.schools = byLea.get(padLeaid(d.leaid)) || 0;
+        });
+      }
+    }
+
+    const haveData = haveState || haveDist || !!visibleSchools;
     const ratio = stuTeacher(enrollment, teachers);
     return {
       stateCount: selectedStates.size,
@@ -2523,7 +2583,7 @@
         <div class="map-kpi-grid" data-detail-kpi>
           <div><span>States</span><b>${num(s.stateCount)}</b></div>
           <div><span>Districts</span><b>${s.districtTotal != null ? num(s.districtTotal) : num(s.count)}</b></div>
-          <div><span>Schools</span><b>${s.schools != null ? num(s.schools) : 'n/a'}</b></div>
+          <div><span>Schools</span><b data-kpi="schools">${s.schools != null ? num(s.schools) : 'n/a'}</b></div>
           <div><span>Enrollment</span><b data-kpi="enrollment">${s.enrollment != null ? num(s.enrollment) : 'n/a'}</b></div>
           <div><span>Teachers FTE</span><b data-kpi="teachers">${s.teachers != null ? fmtFte(s.teachers) : 'n/a'}</b></div>
           <div><span>Staff FTE</span><b data-kpi="staff">${s.staff != null ? fmtFte(s.staff) : 'n/a'}</b></div>
@@ -2627,8 +2687,8 @@
   }
 
   const DETAILED_DISTRICT_ZOOM = 7.5;
-  /** ~1 mile on the scale bar (mid-latitudes); school names appear from here. */
-  const SCHOOL_LABEL_MIN_ZOOM = 14;
+  /** ~3000 ft view distance (mid-latitudes); school names appear from here. */
+  const SCHOOL_LABEL_MIN_ZOOM = 15;
   let detailedFocusState = null;
   let detailedLoadToken = 0;
   let detailedViewTimer = null;
@@ -2728,6 +2788,7 @@
   /**
    * Schools always use shape icons (level = shape). Circles layer stays hidden
    * (kept only as a cheap hit-test fallback). Color mode is applied in paint.
+   * Type rim (schools-rings) only when fill is enrollment/change.
    */
   function applySchoolLayerVisibility() {
     if (!map) return;
@@ -2735,6 +2796,11 @@
       map.setLayoutProperty('schools-dots', 'visibility', 'none');
     }
     const schoolVis = visibility.schools ? 'visible' : 'none';
+    const metricFill = schoolMarkerMode === 'enrollment'
+      || (schoolMarkerMode === 'change' && showSchoolChangeRings());
+    if (map.getLayer('schools-rings')) {
+      map.setLayoutProperty('schools-rings', 'visibility', schoolVis !== 'none' && metricFill ? 'visible' : 'none');
+    }
     if (map.getLayer('schools-circles')) {
       map.setLayoutProperty('schools-circles', 'visibility', schoolVis);
     }
@@ -2742,6 +2808,7 @@
       map.setLayoutProperty('schools-labels', 'visibility', schoolVis);
     }
     try {
+      if (map.getLayer('schools-rings')) map.moveLayer('schools-rings');
       if (map.getLayer('schools-circles')) map.moveLayer('schools-circles');
       if (map.getLayer('schools-labels')) map.moveLayer('schools-labels');
     } catch (_) { /* ignore */ }
@@ -4376,7 +4443,7 @@
     // Schools: level set + enrollment range (+ optional planning region).
     // Selected school always stays visible even if level/size filters would hide it.
     // Other schools stay on the map but are dimmed via paint (not removed).
-    ['schools-circles', 'schools-dots', 'schools-labels'].forEach((layerId) => {
+    ['schools-rings', 'schools-circles', 'schools-dots', 'schools-labels'].forEach((layerId) => {
       if (!map.getLayer(layerId)) return;
       const levels = [...schoolLevels].map(Number);
       const regionFilter = activeRegionCode
@@ -4817,10 +4884,29 @@
     applyFilters();
   }
 
+  /** Update detail-panel Schools KPI to match level / size filters (no full re-render). */
+  function syncDetailSchoolCount() {
+    if (!detailBody) return;
+    let el = detailBody.querySelector('[data-kpi="schools"]');
+    if (!el) {
+      detailBody.querySelectorAll('.map-kpi-grid div').forEach((div) => {
+        const label = div.querySelector('span');
+        if (label && /^Schools$/i.test((label.textContent || '').trim())) {
+          el = div.querySelector('b');
+        }
+      });
+    }
+    if (!el) return;
+    const s = selectionSummary();
+    el.textContent = s.schools != null ? num(s.schools) : 'n/a';
+  }
+
   function setSchoolLevels(levels) {
     schoolLevels.clear();
     (levels || []).forEach((l) => schoolLevels.add(Number(l)));
     applyFilters();
+    pushFilteredStatus();
+    syncDetailSchoolCount();
   }
 
   function setSizeRange(layer, lo, hi) {
@@ -4831,6 +4917,8 @@
       ensureNationwideMetrics();
     }
     applyFilters();
+    pushFilteredStatus();
+    if (layer === 'schools') syncDetailSchoolCount();
   }
 
   function setSelectedDistrict(leaid) {
@@ -4989,7 +5077,8 @@
   /**
    * Shape always = circle. Color = type | enrollment | change.
    * Size always = enrollment (via icon-size).
-   * Outer ring (icon-halo) = school type — only when fill is enrollment/change.
+   * Outer rim = larger schools-rings circle (school type) when fill is enrollment/change.
+   * Avoid icon-halo — it clips to the square SDF texture and looks like a box.
    */
   function applySchoolDotPaint() {
     applySchoolSymbolPaint();
@@ -5005,34 +5094,23 @@
     const changeColor = schoolChangeColorExpr();
     const enrollColor = schoolEnrollmentColorExpr();
     const fill = fillChange ? changeColor : (fillEnroll ? enrollColor : levelColor);
+    const opacity = schoolOpacityExpr();
     try {
       map.setLayoutProperty('schools-circles', 'icon-size', schoolIconSizeExpr());
       map.setPaintProperty('schools-circles', 'icon-color', fill);
-      map.setPaintProperty('schools-circles', 'icon-opacity', schoolOpacityExpr());
-      const id = selectedSchoolId();
-      if (metricFill) {
-        // Colored ring = school type; thicken selected school.
-        map.setPaintProperty('schools-circles', 'icon-halo-color', levelColor);
-        map.setPaintProperty(
-          'schools-circles',
-          'icon-halo-width',
-          id
-            ? ['case', ['==', ['to-string', ['get', 'ncessch']], id], 2.1, 1.45]
-            : 1.45
+      map.setPaintProperty('schools-circles', 'icon-opacity', opacity);
+      map.setPaintProperty('schools-circles', 'icon-halo-width', 0);
+
+      if (map.getLayer('schools-rings')) {
+        map.setLayoutProperty('schools-rings', 'icon-size', schoolIconSizeExpr(1.38));
+        map.setPaintProperty('schools-rings', 'icon-color', levelColor);
+        map.setPaintProperty('schools-rings', 'icon-opacity', opacity);
+        map.setPaintProperty('schools-rings', 'icon-halo-width', 0);
+        map.setLayoutProperty(
+          'schools-rings',
+          'visibility',
+          visibility.schools && metricFill ? 'visible' : 'none'
         );
-        map.setPaintProperty('schools-circles', 'icon-halo-blur', 0.05);
-      } else {
-        // School-type fill: no type ring (fill already is type). Keep a hairline
-        // white outline only for the selected school so it still pops.
-        map.setPaintProperty('schools-circles', 'icon-halo-color', '#ffffff');
-        map.setPaintProperty(
-          'schools-circles',
-          'icon-halo-width',
-          id
-            ? ['case', ['==', ['to-string', ['get', 'ncessch']], id], 1.1, 0]
-            : 0
-        );
-        map.setPaintProperty('schools-circles', 'icon-halo-blur', 0.1);
       }
     } catch (err) {
       console.warn('schools-circles paint failed', err);
@@ -6350,9 +6428,9 @@
   let currentBasemap = 'light';
   const AUTO_SAT_SOURCE = 'nces-auto-satellite';
   const AUTO_SAT_LAYER = 'nces-auto-satellite-fill';
-  /** Zoom where satellite starts / finishes fading in (school select uses zoom 14). */
-  const AUTO_SAT_ZOOM_START = 11.5;
-  const AUTO_SAT_ZOOM_END = 14;
+  /** Short light→satellite crossfade (less muddy overlap while zooming in). */
+  const AUTO_SAT_ZOOM_START = 13.2;
+  const AUTO_SAT_ZOOM_END = 13.9;
 
   /**
    * Raster satellite under street labels; opacity rises with zoom.
@@ -6389,10 +6467,10 @@
         source: AUTO_SAT_SOURCE,
         layout: { visibility: 'visible' },
         paint: {
+          // Steep ramp: light stays clear longer, then snaps to satellite quickly.
           'raster-opacity': [
             'interpolate', ['linear'], ['zoom'],
             AUTO_SAT_ZOOM_START, 0,
-            12.5, 0.45,
             AUTO_SAT_ZOOM_END, 0.95,
           ],
         },
@@ -6400,7 +6478,14 @@
       if (beforeId && map.getLayer(beforeId)) map.addLayer(layer, beforeId);
       else map.addLayer(layer);
     } else {
-      try { map.setLayoutProperty(AUTO_SAT_LAYER, 'visibility', 'visible'); } catch (_) { /* ignore */ }
+      try {
+        map.setLayoutProperty(AUTO_SAT_LAYER, 'visibility', 'visible');
+        map.setPaintProperty(AUTO_SAT_LAYER, 'raster-opacity', [
+          'interpolate', ['linear'], ['zoom'],
+          AUTO_SAT_ZOOM_START, 0,
+          AUTO_SAT_ZOOM_END, 0.95,
+        ]);
+      } catch (_) { /* ignore */ }
     }
   }
 

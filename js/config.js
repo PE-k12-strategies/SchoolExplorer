@@ -35,21 +35,28 @@ window.roleOptionsHtml = function (selected, includeBlank) {
   return blank + opts;
 };
 
-// Base URL where these HTML files are served (required for auth / password-reset emails).
-// Must also be listed under Supabase → Authentication → URL Configuration
-// (Site URL + Redirect URLs).
+// Public hosted origin for auth emails (signup confirm + password reset).
+// CRITICAL: Supabase → Authentication → URL Configuration must use this as
+// Site URL. If Site URL is still http://localhost:3000, confirmation emails
+// will send outsiders to localhost even when emailRedirectTo is correct.
 window.APP_BASE_URL = 'https://pe-k12-strategies.github.io/SchoolExplorer';
 
 window.getAppUrl = function (page) {
-  const file = page || 'index.html';
-  if (window.APP_BASE_URL) {
-    return `${window.APP_BASE_URL.replace(/\/$/, '')}/${file}`;
-  }
+  const file = (page && String(page).trim()) || 'index.html';
+  // Always prefer the hosted base for auth links — never the current tab origin
+  // (localhost) or file://, or email recipients outside the org cannot open them.
+  const base = (window.APP_BASE_URL || '').replace(/\/$/, '');
+  if (base) return `${base}/${file.replace(/^\//, '')}`;
   if (window.location.protocol === 'file:') {
     return `http://localhost:5500/${file}`;
   }
-  const base = window.location.href.replace(/[^/]*$/, '');
-  return base + file;
+  const originBase = window.location.href.replace(/[^/]*$/, '');
+  return originBase + file;
+};
+
+/** Absolute redirect used for signup / reset emails (GitHub Pages). */
+window.getAuthRedirectUrl = function (page) {
+  return window.getAppUrl(page || 'index.html');
 };
 
 window.isSupabaseConfigured = function () {

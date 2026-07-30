@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Confirming email — School Explorer</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <main class="auth-card">
+    <h1>Confirming your email…</h1>
+    <p id="status">Please wait.</p>
+    <p id="message" class="message" hidden></p>
+    <p><a id="home-link" href="index.html">Back to sign in</a></p>
+  </main>
+
+  <script src="js/config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8"></script>
+  <script>
+    const statusEl = document.getElementById('status');
+    const messageEl = document.getElementById('message');
+    const homeLink = document.getElementById('home-link');
+
+    function showError(text) {
+      statusEl.textContent = 'Confirmation failed';
+      messageEl.hidden = false;
+      messageEl.className = 'message show error';
+      messageEl.textContent = text;
+    }
+
+    async function run() {
+      if (!window.isSupabaseConfigured()) {
+        showError('Supabase is not configured.');
+        return;
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      // Also accept hash params (some mail clients rewrite query strings).
+      const hash = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+      const token_hash = params.get('token_hash') || hash.get('token_hash');
+      let type = params.get('type') || hash.get('type') || 'signup';
+      const next = params.get('next') || hash.get('next') || 'index.html';
+
+      homeLink.href = window.getAppUrl('index.html');
+
+      if (!token_hash) {
+        // Landing with access_token in the hash (default Supabase verify redirect).
+        if (hash.get('access_token') || hash.get('refresh_token')) {
+          const client = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+            auth: { detectSessionInUrl: true, persistSession: true },
+          });
+          const { data, error } = await client.auth.getSession();
+          if (error || !data.session) {
+            showError(error?.message || 'Could not read session from this link.');
+            return;
+          }
+          statusEl.textContent = 'Email confirmed. Redirecting…';
+          window.location.replace(window.getAppUrl(next));
+          return;
+        }
+        showError('Missing confirmation token. Open the link from your email, or ask an admin to resend it.');
+        return;
+      }
+
+      const client = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+      });
+
+      // Signup templates may send type=signup or type=email depending on Supabase version.
+      const tryTypes = [type, type === 'signup' ? 'email' : 'signup'].filter(
+        (t, i, arr) => t && arr.indexOf(t) === i
+      );
+
+      let lastError = null;
+      for (const t of tryTypes) {
+        const { error } = await client.auth.verifyOtp({ token_hash, type: t });
+        if (!error) {
+          statusEl.textContent = 'Email confirmed. Redirecting…';
+          const dest = (t === 'recovery' || type === 'recovery')
+            ? window.getAppUrl('reset-password.html')
+            : window.getAppUrl(next);
+          window.location.replace(dest);
+          return;
+        }
+        lastError = error;
+      }
+
+      showError(lastError?.message || 'Invalid or expired confirmation link. Ask an admin to resend it.');
+    }
+
+    run().catch((err) => showError(err.message || String(err)));
+  </script>
+</body>
+</html>

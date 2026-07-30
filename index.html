@@ -113,7 +113,8 @@
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: false,
+        // Pick up #access_token=… from confirm / recovery redirects.
+        detectSessionInUrl: true,
       },
     });
 
@@ -275,7 +276,7 @@
       e.preventDefault();
       clearMessage();
       const email = new FormData(e.target).get('email');
-      const redirectTo = window.getAppUrl('reset-password.html');
+      const redirectTo = window.getAuthRedirectUrl('reset-password.html');
 
       const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
 
@@ -285,7 +286,7 @@
       }
 
       showMessage(
-        `Reset link sent to ${email}. Open the link while this site is running at ${redirectTo.replace('/reset-password.html', '')}`,
+        `Reset link sent to ${email}. Open it on ${redirectTo.replace(/\/reset-password\.html$/, '')}`,
         'success'
       );
     });
@@ -294,12 +295,22 @@
       e.preventDefault();
       clearMessage();
       const form = new FormData(signupForm);
+      // Must be the hosted GitHub Pages URL — never localhost — so confirm emails
+      // work for anyone. Also set Site URL in Supabase Auth URL Configuration.
+      const emailRedirectTo = window.getAuthRedirectUrl('index.html');
+      if (/localhost|127\.0\.0\.1/i.test(emailRedirectTo)) {
+        showMessage(
+          'Signup blocked: auth redirect is still localhost. Set window.APP_BASE_URL in js/config.js and Supabase Site URL to the GitHub Pages site.',
+          'error'
+        );
+        return;
+      }
 
       const { data, error } = await client.auth.signUp({
         email: form.get('email'),
         password: form.get('password'),
         options: {
-          emailRedirectTo: window.getAppUrl('index.html'),
+          emailRedirectTo,
           data: {
             name: form.get('name'),
             title: form.get('title'),

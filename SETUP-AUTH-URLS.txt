@@ -1,0 +1,67 @@
+AUTH EMAIL LINKS — when Site URL cannot be changed
+==================================================
+
+If Site URL is locked on http://localhost:3000 (permissions / org policy),
+do NOT rely on it. Use the custom email template below so confirm links go
+straight to GitHub Pages.
+
+
+STEP 1 — Redirect allow list (try this even if Site URL is locked)
+------------------------------------------------------------------
+Supabase → Authentication → URL Configuration → Redirect URLs
+
+Add:
+  https://pe-k12-strategies.github.io/SchoolExplorer/**
+  https://pe-k12-strategies.github.io/SchoolExplorer/auth-confirm.html
+  https://pe-k12-strategies.github.io/SchoolExplorer/index.html
+  https://pe-k12-strategies.github.io/SchoolExplorer/reset-password.html
+
+Save.
+
+
+STEP 2 — Custom Confirm signup email template (bypasses Site URL)
+-----------------------------------------------------------------
+Supabase → Authentication → Email Templates → Confirm signup
+
+Replace the link with (use the TokenHash path, not {{ .ConfirmationURL }}
+and not {{ .SiteURL }}):
+
+  <h2>Confirm your email</h2>
+  <p>Confirm your School Explorer account:</p>
+  <p>
+    <a href="https://pe-k12-strategies.github.io/SchoolExplorer/auth-confirm.html?token_hash={{ .TokenHash }}&type=signup">
+      Confirm email address
+    </a>
+  </p>
+
+Save the template.
+
+
+STEP 3 — Password recovery template (same idea)
+-----------------------------------------------
+Email Templates → Reset password — link:
+
+  <a href="https://pe-k12-strategies.github.io/SchoolExplorer/auth-confirm.html?token_hash={{ .TokenHash }}&type=recovery">
+    Reset password
+  </a>
+
+
+STEP 4 — Resend for users stuck with localhost links
+----------------------------------------------------
+Authentication → Users → (user) → Resend confirmation
+
+
+If you cannot edit templates either
+-----------------------------------
+Ask the Supabase project owner to either:
+  • set Site URL to https://pe-k12-strategies.github.io/SchoolExplorer, or
+  • paste the Confirm signup template above
+
+Owner / settings:
+  https://supabase.com/dashboard/project/jmmrsetieidkwycnfvkm/settings/general
+
+
+Rescue without waiting
+----------------------
+1. Auth → Users → confirm the email manually, then the user signs in normally, or
+2. After STEP 2, resend confirmation so they get a GitHub Pages link.
