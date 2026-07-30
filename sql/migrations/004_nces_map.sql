@@ -35,6 +35,11 @@ $$;
 
 -- 3) State-level summary (map States layer) -----------------------------------
 -- One row per state that has synced district data.
+-- Drop first: CREATE OR REPLACE cannot change OUT/return row types.
+drop function if exists public.nces_map_state_summary(int);
+drop function if exists public.nces_map_district_points(text, int);
+drop function if exists public.nces_map_school_points(text, text, int);
+
 create or replace function public.nces_map_state_summary(p_year int default null)
 returns table (
   state_code text,

@@ -349,9 +349,14 @@
               <input type="checkbox" id="map-layer-districts" class="map-layer-sync" hidden>
             </div>
 
-            <details class="map-group" open>
-              <summary class="map-group-title">Compare years</summary>
-              <div class="map-change-years-row" id="map-change-years-row">
+            <details class="map-group" open id="map-year-group">
+              <summary class="map-group-title" id="map-year-group-title">School year</summary>
+              <div class="map-change-years-row" id="map-year-single-row">
+                <label>Year
+                  <select id="map-year-display"></select>
+                </label>
+              </div>
+              <div class="map-change-years-row hidden" id="map-change-years-row">
                 <label>From
                   <select id="map-year-from"></select>
                 </label>
@@ -363,10 +368,10 @@
 
             <details class="map-group" id="map-controls-schools" hidden>
               <summary class="map-group-title">School controls</summary>
-              <label class="map-check"><input type="checkbox" class="map-level" value="1" checked><span class="map-swatch map-shape-circle" style="background:#2563eb"></span> Elementary</label>
-              <label class="map-check"><input type="checkbox" class="map-level" value="2" checked><span class="map-swatch map-shape-triangle" style="background:#16a34a"></span> Middle</label>
-              <label class="map-check"><input type="checkbox" class="map-level" value="3" checked><span class="map-swatch map-shape-square" style="background:#dc2626"></span> High</label>
-              <label class="map-check"><input type="checkbox" class="map-level" value="4" checked><span class="map-swatch map-shape-diamond" style="background:#9333ea"></span> Other / Combined</label>
+              <label class="map-check"><input type="checkbox" class="map-level" value="1" checked><span class="map-swatch map-shape-circle" data-level-swatch="1"></span> Elementary</label>
+              <label class="map-check"><input type="checkbox" class="map-level" value="2" checked><span class="map-swatch map-shape-circle" data-level-swatch="2"></span> Middle</label>
+              <label class="map-check"><input type="checkbox" class="map-level" value="3" checked><span class="map-swatch map-shape-circle" data-level-swatch="3"></span> High</label>
+              <label class="map-check"><input type="checkbox" class="map-level" value="4" checked><span class="map-swatch map-shape-circle" data-level-swatch="4"></span> Other / Combined</label>
               <div class="map-colorby" id="school-marker-mode-wrap">
                 <div class="map-colorby-label">School marker color</div>
                 <div class="colorby-toggle" id="school-marker-mode" role="group" aria-label="School marker color mode">
@@ -374,7 +379,7 @@
                   <button type="button" data-school-fill="enrollment">Enrollment</button>
                   <button type="button" data-school-fill="change">Change</button>
                 </div>
-                <p class="map-legend-note">Shape = school type · Size = enrollment</p>
+                <p class="map-legend-note" id="school-marker-mode-note">Fill = school type · Size = enrollment</p>
               </div>
               <div class="range-field">
                 <div class="range-head"><span>School size</span><span class="range-val" id="range-schools-val">All</span></div>
@@ -482,10 +487,24 @@
         </div>
 
         <div class="map-school-load hidden" id="map-school-load" aria-live="polite">
-          <div class="map-school-load-label" id="map-school-load-label">Loading schools…</div>
+          <div class="map-school-load-head">
+            <strong id="map-school-load-title">Loading schools</strong>
+            <span class="map-school-load-pct" id="map-school-load-pct">0%</span>
+          </div>
+          <div class="map-school-load-label" id="map-school-load-label">Starting…</div>
           <div class="map-school-load-track" role="progressbar" id="map-school-load-track" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
             <div class="map-school-load-bar" id="map-school-load-bar"></div>
           </div>
+          <div class="map-school-load-meta" id="map-school-load-meta"></div>
+          <div class="map-school-load-states" id="map-school-load-states" hidden></div>
+          <div class="map-school-load-actions" id="map-school-load-actions">
+            <button type="button" class="map-school-load-btn" id="map-school-load-pause">Pause</button>
+            <button type="button" class="map-school-load-btn is-danger" id="map-school-load-stop">Stop</button>
+          </div>
+        </div>
+        <div class="map-bg-load hidden" id="map-bg-load" aria-live="polite">
+          <div class="map-bg-load-title">Background data</div>
+          <ul class="map-bg-load-list" id="map-bg-load-list"></ul>
         </div>
         <div class="map-status" id="map-status" role="status">Loading map…</div>
 
@@ -641,10 +660,10 @@
 
     let loadProgressState = { done: 0, total: 0, label: '' };
 
-    /** Map status toast: show on new text, auto-hide after 2s. */
+    /** Map status toast: show on new text, auto-hide after 2s (unless sticky). */
     let mapStatusHideTimer = null;
     let mapStatusLastText = null;
-    function setMapStatus(text) {
+    function setMapStatus(text, opts = {}) {
       const statusEl = document.getElementById('map-status');
       if (!statusEl) return;
       const msg = text == null ? '' : String(text).trim();
@@ -657,16 +676,23 @@
         }
         return;
       }
-      // Same message → don't flash again (even if already hidden).
-      if (msg === mapStatusLastText) return;
+      // Same message → don't flash again (even if already hidden), unless sticky refresh.
+      if (msg === mapStatusLastText && !opts.force) return;
       mapStatusLastText = msg;
       statusEl.textContent = msg;
       statusEl.classList.remove('is-hidden');
-      if (mapStatusHideTimer) clearTimeout(mapStatusHideTimer);
-      mapStatusHideTimer = setTimeout(() => {
-        statusEl.classList.add('is-hidden');
+      if (mapStatusHideTimer) {
+        clearTimeout(mapStatusHideTimer);
         mapStatusHideTimer = null;
-      }, 2000);
+      }
+      if (opts.sticky) return;
+      const hideMs = opts.durationMs != null ? opts.durationMs : 2000;
+      if (hideMs > 0) {
+        mapStatusHideTimer = setTimeout(() => {
+          statusEl.classList.add('is-hidden');
+          mapStatusHideTimer = null;
+        }, hideMs);
+      }
     }
     // Start the hide timer for the initial "Loading map…" label.
     setMapStatus(document.getElementById('map-status')?.textContent || 'Loading map…');
@@ -726,6 +752,40 @@
     }
 
     let mapProgressQuiet = false;
+    let mapProgressPulseTimer = null;
+
+    function setMapProgressBusy(busy) {
+      const bar = document.getElementById('loading-progress-bar');
+      if (bar) bar.classList.toggle('is-busy', !!busy);
+    }
+
+    function stopMapProgressPulse() {
+      if (mapProgressPulseTimer) {
+        clearInterval(mapProgressPulseTimer);
+        mapProgressPulseTimer = null;
+      }
+      setMapProgressBusy(false);
+    }
+
+    /**
+     * While awaiting a slow step (Mapbox style, RPCs), ease the bar forward so
+     * it never looks frozen between real checkpoints.
+     */
+    function startMapProgressPulse({ from = 4, cap = 34, label = 'Loading map…' } = {}) {
+      stopMapProgressPulse();
+      setMapProgressBusy(true);
+      setLoadProgressPercent(from, label);
+      let step = 0;
+      mapProgressPulseTimer = setInterval(() => {
+        if (mapProgressQuiet) {
+          stopMapProgressPulse();
+          return;
+        }
+        step += 1;
+        const eased = from + (cap - from) * (1 - Math.exp(-step / 8));
+        setLoadProgressPercent(Math.min(cap, Math.round(eased)), label);
+      }, 280);
+    }
 
     /** Set an absolute 0–100% progress (map / long boundary loads). */
     function setLoadProgressPercent(pct, label) {
@@ -747,14 +807,76 @@
       if (wrap) wrap.classList.remove('hidden');
       const textEl = document.getElementById('loading-text');
       if (textEl && loadProgressState.label) textEl.textContent = loadProgressState.label;
+      const bar = document.getElementById('loading-progress-bar');
+      if (bar) {
+        // Keep shimmer while under ~90%; real finish clears it.
+        if (n < 90) bar.classList.add('is-busy');
+        else bar.classList.remove('is-busy');
+      }
       updateLoadProgressUI();
     }
 
     function finishMapLoadProgress(label) {
-      setLoading(false);
-      mapProgressQuiet = true;
-      setQuietLoadBar(false);
-      if (label) setMapStatus(label);
+      stopMapProgressPulse();
+      setLoadProgressPercent(100, label || 'Map ready');
+      // Brief beat at 100% so the jump to complete is visible, then dismiss.
+      setTimeout(() => {
+        setLoading(false);
+        mapProgressQuiet = true;
+        setQuietLoadBar(false);
+        if (label) setMapStatus(label);
+        // Keep a small background stages card while outlines/metrics continue.
+        updateMapBgLoadStages({
+          states: 'done',
+          metrics: 'pending',
+          districts: 'pending',
+        });
+      }, 320);
+    }
+
+    /** Compact card for post-overlay boundary / metric downloads. */
+    const mapBgStages = {
+      states: 'pending',
+      metrics: 'pending',
+      districts: 'pending',
+    };
+    function updateMapBgLoadStages(patch) {
+      Object.assign(mapBgStages, patch || {});
+      const wrap = document.getElementById('map-bg-load');
+      const list = document.getElementById('map-bg-load-list');
+      if (!wrap || !list) return;
+      const items = [
+        { key: 'states', label: 'State outlines' },
+        { key: 'metrics', label: 'State enrollment colors' },
+        { key: 'districts', label: 'District mesh (background)' },
+      ];
+      const allDone = items.every((it) => mapBgStages[it.key] === 'done');
+      if (allDone) {
+        wrap.classList.add('hidden');
+        return;
+      }
+      wrap.classList.remove('hidden');
+      list.innerHTML = items.map((it) => {
+        const st = mapBgStages[it.key] || 'pending';
+        const mark = st === 'done' ? '✓' : (st === 'active' ? '…' : '·');
+        return `<li class="is-${st}"><span aria-hidden="true">${mark}</span>${it.label}</li>`;
+      }).join('');
+    }
+
+    function noteMapBgProgress(pct, label) {
+      const text = String(label || '');
+      if (/state outline/i.test(text)) {
+        updateMapBgLoadStages({
+          states: /ready|unavailable/i.test(text) ? 'done' : 'active',
+        });
+      } else if (/district mesh|district outline/i.test(text)) {
+        updateMapBgLoadStages({
+          states: 'done',
+          districts: /map ready|refreshing/i.test(text) ? 'done' : 'active',
+        });
+      } else if (/map ready/i.test(text) || pct >= 100) {
+        updateMapBgLoadStages({ states: 'done', districts: 'done', metrics: 'done' });
+      }
     }
 
     function setQuietLoadBar(show, pct) {
@@ -1312,7 +1434,8 @@
       setHidden('kpi-schools-card', singleSchool);
       setHidden('school-grade-panel', !singleSchool);
       setHidden('district-grade-panel', singleSchool);
-      setHidden('staff-table-panel', !singleLea);
+      // Staff table is LEA CCD — hide when focused on one school to avoid confusion.
+      setHidden('staff-table-panel', !singleLea || singleSchool);
       setHidden('kpi-revenue-card', !singleLea && !(!hasState && !hasLea && !hasSchool));
       setHidden('kpi-expenditure-card', !singleLea && !(!hasState && !hasLea && !hasSchool));
       setHidden('school-directory-panel', false);
@@ -1556,6 +1679,162 @@
       try { syncMapLayerControlVisibility(); } catch (_) { /* ignore */ }
     }
 
+    function syncMapSchoolLoadActions(status) {
+      const pauseBtn = document.getElementById('map-school-load-pause');
+      const stopBtn = document.getElementById('map-school-load-stop');
+      const actions = document.getElementById('map-school-load-actions');
+      if (!pauseBtn || !stopBtn) return;
+      const active = status === 'loading' || status === 'paused';
+      if (actions) actions.hidden = !active && status !== 'stopped';
+      pauseBtn.disabled = !active;
+      stopBtn.disabled = !active && status !== 'paused';
+      pauseBtn.textContent = status === 'paused' ? 'Resume' : 'Pause';
+    }
+
+    function updateMapSchoolLoadPanel(rows, meta) {
+      const wrap = document.getElementById('map-school-load');
+      const title = document.getElementById('map-school-load-title');
+      const label = document.getElementById('map-school-load-label');
+      const pctEl = document.getElementById('map-school-load-pct');
+      const metaEl = document.getElementById('map-school-load-meta');
+      const chips = document.getElementById('map-school-load-states');
+      const bar = document.getElementById('map-school-load-bar');
+      const track = document.getElementById('map-school-load-track');
+      const n = (rows || []).length;
+      const status = meta && meta.status;
+      const schoolsOn = !!document.getElementById('map-layer-schools')?.checked;
+      if (!wrap) return;
+
+      if ((status === 'loading' || status === 'paused') && schoolsOn && label && bar) {
+        wrap.classList.remove('hidden');
+        const done = Number(meta.done) || 0;
+        const total = Math.max(1, Number(meta.total) || 1);
+        const pct = Math.min(100, Math.round((done / total) * 100));
+        const active = (meta.activeStates && meta.activeStates.length)
+          ? meta.activeStates.join(', ')
+          : (meta.state || '…');
+        if (title) {
+          title.textContent = status === 'paused'
+            ? 'Schools load paused'
+            : (meta.streaming ? 'Streaming schools onto map' : 'Loading schools nationwide');
+        }
+        label.textContent = status === 'paused'
+          ? `Paused at ${done}/${total} states · ${n.toLocaleString()} schools kept on map`
+          : (meta.streaming
+            ? `Now ${active} — markers appear as each page arrives`
+            : `States ${done}/${total} · working on ${active}`);
+        if (pctEl) pctEl.textContent = `${pct}%`;
+        if (metaEl) {
+          metaEl.textContent =
+            `${n.toLocaleString()} schools on map`
+            + (meta.failed && meta.failed.length ? ` · ${meta.failed.length} failed` : '')
+            + ' · 6 states at a time';
+        }
+        bar.style.width = `${pct}%`;
+        if (track) track.setAttribute('aria-valuenow', String(pct));
+        if (chips) {
+          chips.hidden = false;
+          const failSet = new Set(meta.failed || []);
+          const doneSet = new Set(meta.doneStates || []);
+          const activeSet = new Set(meta.activeStates || []);
+          const show = [
+            ...(meta.activeStates || []),
+            ...(meta.doneStates || []).slice(-10),
+          ].filter((c, i, arr) => arr.indexOf(c) === i).slice(0, 14);
+          chips.innerHTML = show.map((code) => {
+            const cls = failSet.has(code)
+              ? 'is-fail'
+              : (activeSet.has(code) ? 'is-active' : (doneSet.has(code) ? 'is-done' : ''));
+            return `<span class="map-school-load-chip ${cls}">${code}</span>`;
+          }).join('');
+        }
+        syncMapSchoolLoadActions(status);
+        setMapStatus(
+          status === 'paused'
+            ? `Schools paused · ${n.toLocaleString()} markers`
+            : `Schools ${done}/${total} states · ${n.toLocaleString()} markers`
+              + (meta.streaming ? ` · streaming ${active}` : ''),
+          { sticky: true, force: true }
+        );
+        return;
+      }
+
+      if (status === 'stopped' && schoolsOn) {
+        wrap.classList.remove('hidden');
+        if (title) title.textContent = 'Schools load stopped';
+        if (label) {
+          label.textContent = n
+            ? `Kept ${n.toLocaleString()} schools already loaded`
+            : 'Stopped before any schools loaded';
+        }
+        if (metaEl) metaEl.textContent = 'Turn Schools off/on to restart the nationwide load';
+        syncMapSchoolLoadActions('stopped');
+        const pauseBtn = document.getElementById('map-school-load-pause');
+        const stopBtn = document.getElementById('map-school-load-stop');
+        if (pauseBtn) pauseBtn.disabled = true;
+        if (stopBtn) stopBtn.disabled = true;
+        setMapStatus(
+          n ? `School load stopped · ${n.toLocaleString()} markers kept` : 'School load stopped',
+          { force: true }
+        );
+        setTimeout(() => wrap.classList.add('hidden'), 4000);
+        return;
+      }
+
+      if (status === 'done' && schoolsOn) {
+        const fail = (meta.failed && meta.failed.length)
+          ? ` (${meta.failed.length} state(s) failed)`
+          : '';
+        wrap.classList.remove('hidden');
+        if (title) title.textContent = 'Schools loaded';
+        if (label) {
+          label.textContent = n
+            ? `${n.toLocaleString()} school markers nationwide${fail}`
+            : 'No schools found for this scope';
+        }
+        if (pctEl) pctEl.textContent = '100%';
+        if (bar) bar.style.width = '100%';
+        if (metaEl) metaEl.textContent = 'You can pan/zoom — markers stay on the map';
+        syncMapSchoolLoadActions('done');
+        const actions = document.getElementById('map-school-load-actions');
+        if (actions) actions.hidden = true;
+        setTimeout(() => wrap.classList.add('hidden'), 2800);
+        setMapStatus(n
+          ? `${n.toLocaleString()} school marker(s) loaded${fail}`
+          : 'No schools found for this scope', { force: true });
+        return;
+      }
+
+      if (status !== 'loading' && status !== 'paused') {
+        wrap.classList.add('hidden');
+      }
+    }
+
+    function wireMapSchoolLoadControls() {
+      const pauseBtn = document.getElementById('map-school-load-pause');
+      const stopBtn = document.getElementById('map-school-load-stop');
+      if (pauseBtn && !pauseBtn.dataset.wired) {
+        pauseBtn.dataset.wired = '1';
+        pauseBtn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (pauseBtn.textContent === 'Resume') {
+            window.NcesMap?.resumeNationwideSchools?.();
+          } else {
+            window.NcesMap?.pauseNationwideSchools?.();
+          }
+        });
+      }
+      if (stopBtn && !stopBtn.dataset.wired) {
+        stopBtn.dataset.wired = '1';
+        stopBtn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          window.NcesMap?.stopNationwideSchools?.();
+        });
+      }
+    }
+
     /**
      * Apply Schools visibility without stomping an explicit user choice.
      * Defaults: on with district/school scope, off for state/nationwide — only when
@@ -1566,6 +1845,14 @@
       if (!forceDefault && mapSchoolsLayerRemembered != null) {
         setMapSchoolsVisible(mapSchoolsLayerRemembered);
         return mapSchoolsLayerRemembered;
+      }
+      // If the Schools checkbox is already on, treat that as the user preference
+      // so nationwide syncMapScopeMode does not silently turn it back off.
+      const el = document.getElementById('map-layer-schools');
+      if (!forceDefault && el && el.checked) {
+        mapSchoolsLayerRemembered = true;
+        setMapSchoolsVisible(true);
+        return true;
       }
       const want = !!(f.leaid || (f.leaids && f.leaids.length) || f.school || (f.schools && f.schools.length));
       setMapSchoolsVisible(want);
@@ -1947,20 +2234,20 @@
       if (schoolsEl) {
         schoolsEl.addEventListener('change', () => {
           mapSchoolsLayerRemembered = !!schoolsEl.checked;
+          // setLayerVisible already kicks the correct school load for the scope.
           window.NcesMap.setLayerVisible('schools', schoolsEl.checked);
           syncMapLayerControlVisibility();
           if (!schoolsEl.checked) {
             document.getElementById('map-school-load')?.classList.add('hidden');
+            setMapStatus('Schools layer off');
           } else {
-            // Turning schools on — load for current scope if needed.
-            const f = typeof getFilters === 'function' ? getFilters() : {};
-            if (f.leaid && typeof ensureMapSchoolsForDistrict === 'function') {
-              ensureMapSchoolsForDistrict(f.leaid).catch(() => { /* ignore */ });
-            } else if (f.state && window.NcesMap?.loadSchoolsForScope) {
-              window.NcesMap.loadSchoolsForScope(f).catch(() => { /* ignore */ });
-            } else if (!f.state && window.NcesMap?.loadNationwideSchools) {
-              window.NcesMap.loadNationwideSchools(f);
-            }
+            const wrap = document.getElementById('map-school-load');
+            const label = document.getElementById('map-school-load-label');
+            const title = document.getElementById('map-school-load-title');
+            if (wrap) wrap.classList.remove('hidden');
+            if (title) title.textContent = 'Loading schools';
+            if (label) label.textContent = 'Starting school load…';
+            setMapStatus('Schools on — loading markers…', { sticky: true, force: true });
           }
         });
       }
@@ -1989,12 +2276,20 @@
       const changeYearsEl = document.getElementById('map-change-years');
       const yearFrom = document.getElementById('map-year-from');
       const yearTo = document.getElementById('map-year-to');
+      const yearDisplay = document.getElementById('map-year-display');
+      const yearSingleRow = document.getElementById('map-year-single-row');
+      const yearCompareRow = document.getElementById('map-change-years-row');
+      const yearGroupTitle = document.getElementById('map-year-group-title');
       const MAP_YEARS = (NCES_CONFIG.schoolYears || [2015, 2020, 2021, 2022, 2023, 2024]).slice();
+      let savedCompareFrom = MAP_YEARS.includes(2021) ? 2021 : MAP_YEARS[0];
+      let savedCompareTo = NCES_CONFIG.defaultSchoolYear || Math.max(...MAP_YEARS);
+
       function fillMapYearSelects(preferredFrom, preferredTo) {
         if (!yearFrom || !yearTo) return;
         const opts = MAP_YEARS.map((y) => `<option value="${y}">${y}</option>`).join('');
         yearFrom.innerHTML = opts;
         yearTo.innerHTML = opts;
+        if (yearDisplay) yearDisplay.innerHTML = opts;
         const baseline = preferredTo != null
           ? preferredTo
           : (NCES_CONFIG.defaultSchoolYear || Math.max(...MAP_YEARS));
@@ -2005,32 +2300,124 @@
         const to = MAP_YEARS.includes(baseline) ? baseline : Math.max(...MAP_YEARS);
         yearFrom.value = String(from);
         yearTo.value = String(to);
+        if (yearDisplay) yearDisplay.value = String(to);
+        savedCompareFrom = from;
+        savedCompareTo = to;
       }
-      function pushChangeYears() {
-        if (!yearFrom || !yearTo || !window.NcesMap) return;
-        const from = Number(yearFrom.value);
-        const to = Number(yearTo.value);
-        // Same year is allowed (snapshot / no change rings). Do not auto-bump To.
-        window.NcesMap.setChangeYears(from, to);
+
+      function isMapYearCompareMode() {
+        const metric = document.querySelector(
+          '.colorby-toggle-states button.is-active, .colorby-toggle-districts button.is-active'
+        )?.getAttribute('data-metric');
+        const schoolMode = document.querySelector('#school-marker-mode button.is-active')
+          ?.getAttribute('data-school-fill');
+        return metric === 'change' || schoolMode === 'change';
       }
+
+      function syncToolbarYearsFromMap(years) {
+        const yearBox = document.getElementById('filter-year');
+        if (!yearBox || !years || !years.length) return;
+        const want = new Set(years.map(Number).filter(Number.isFinite));
+        let changed = false;
+        yearBox.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+          const on = want.has(Number(cb.value));
+          if (cb.checked !== on) {
+            cb.checked = on;
+            changed = true;
+          }
+        });
+        if (!changed) return;
+        yearFilterTouched = true;
+        if (typeof updateYearDropdownSummary === 'function') updateYearDropdownSummary();
+        if (typeof scheduleYearReload === 'function') scheduleYearReload();
+      }
+
+      function updateMapYearCompareUi() {
+        const comparing = isMapYearCompareMode();
+        const wasComparing = !!(yearCompareRow && !yearCompareRow.classList.contains('hidden'));
+        if (yearSingleRow) yearSingleRow.classList.toggle('hidden', comparing);
+        if (yearCompareRow) yearCompareRow.classList.toggle('hidden', !comparing);
+        if (yearGroupTitle) yearGroupTitle.textContent = comparing ? 'Compare years' : 'School year';
+        if (comparing) {
+          if (yearFrom && yearTo) {
+            // Leaving single-year mode: keep the displayed year as the "To" side.
+            if (!wasComparing && yearDisplay) {
+              const displayY = Number(yearDisplay.value);
+              if (Number.isFinite(displayY) && MAP_YEARS.includes(displayY)) {
+                savedCompareTo = displayY;
+              }
+            }
+            yearFrom.value = String(
+              MAP_YEARS.includes(savedCompareFrom) ? savedCompareFrom : MAP_YEARS[0]
+            );
+            yearTo.value = String(
+              MAP_YEARS.includes(savedCompareTo)
+                ? savedCompareTo
+                : (NCES_CONFIG.defaultSchoolYear || Math.max(...MAP_YEARS))
+            );
+          }
+        } else if (yearDisplay) {
+          // Prefer the user's current single-year pick. Only fall back when empty
+          // or when switching out of compare mode.
+          let y = Number(yearDisplay.value);
+          if (!Number.isFinite(y) || !MAP_YEARS.includes(y) || wasComparing) {
+            y = Number(savedCompareTo)
+              || Number(yearTo?.value)
+              || NCES_CONFIG.defaultSchoolYear
+              || Math.max(...MAP_YEARS);
+          }
+          yearDisplay.value = String(MAP_YEARS.includes(y) ? y : Math.max(...MAP_YEARS));
+          savedCompareTo = Number(yearDisplay.value);
+        }
+        pushChangeYears({ skipToolbarSync: true });
+      }
+
+      function pushChangeYears(opts = {}) {
+        if (!window.NcesMap) return;
+        if (isMapYearCompareMode()) {
+          if (!yearFrom || !yearTo) return;
+          const from = Number(yearFrom.value);
+          const to = Number(yearTo.value);
+          savedCompareFrom = from;
+          savedCompareTo = to;
+          window.NcesMap.setChangeYears(from, to);
+          if (!opts.skipToolbarSync) syncToolbarYearsFromMap([from, to]);
+        } else if (yearDisplay) {
+          const y = Number(yearDisplay.value);
+          if (!Number.isFinite(y)) return;
+          savedCompareTo = y;
+          window.NcesMap.setChangeYears(y, y);
+          if (!opts.skipToolbarSync) syncToolbarYearsFromMap([y]);
+        }
+      }
+
       function syncMapYearsFromDashboardFilter() {
         const f = typeof getFilters === 'function' ? getFilters() : null;
         const years = (f && f.years ? f.years : [])
           .map(Number)
           .filter((y) => Number.isFinite(y))
           .sort((a, b) => a - b);
-        if (years.length < 2 || !yearFrom || !yearTo) return;
-        yearFrom.value = String(years[0]);
-        yearTo.value = String(years[years.length - 1]);
-        pushChangeYears();
+        if (!years.length) return;
+        if (years.length >= 2 && yearFrom && yearTo) {
+          yearFrom.value = String(years[0]);
+          yearTo.value = String(years[years.length - 1]);
+          savedCompareFrom = years[0];
+          savedCompareTo = years[years.length - 1];
+        }
+        if (yearDisplay) {
+          yearDisplay.value = String(years[years.length - 1]);
+        }
+        updateMapYearCompareUi();
       }
+
       fillMapYearSelects(
         MAP_YEARS.includes(2021) ? 2021 : undefined,
         NCES_CONFIG.defaultSchoolYear || Math.max(...MAP_YEARS)
       );
-      pushChangeYears();
+      updateMapYearCompareUi();
       if (yearFrom) yearFrom.addEventListener('change', pushChangeYears);
       if (yearTo) yearTo.addEventListener('change', pushChangeYears);
+      if (yearDisplay) yearDisplay.addEventListener('change', pushChangeYears);
 
       const changeFieldToggle = document.getElementById('change-field-toggle');
       if (changeFieldToggle) {
@@ -2050,7 +2437,22 @@
           });
         });
         if (changeYearsEl) changeYearsEl.classList.toggle('hidden', value !== 'change');
-        if (value === 'change') pushChangeYears();
+        // Restore From/To (or single year) BEFORE painting Color-by Change.
+        if (typeof updateMapYearCompareUi === 'function') updateMapYearCompareUi();
+        if (value === 'change' && yearFrom && yearTo
+          && Number(yearFrom.value) === Number(yearTo.value)) {
+          const baseline = Number(yearTo.value)
+            || Number(NCES_CONFIG.defaultSchoolYear)
+            || Math.max(...MAP_YEARS);
+          const fromDefault = MAP_YEARS.includes(2021)
+            ? 2021
+            : (MAP_YEARS.filter((y) => y < baseline).pop() || MAP_YEARS[0]);
+          yearFrom.value = String(fromDefault);
+          yearTo.value = String(baseline);
+          savedCompareFrom = fromDefault;
+          savedCompareTo = baseline;
+          pushChangeYears({ skipToolbarSync: true });
+        }
         window.NcesMap.setColorMetric(value);
         updateChangeLegendVisibility();
       }
@@ -2089,6 +2491,8 @@
         if (typeof applyRememberedSchoolsLayer === 'function') {
           applyRememberedSchoolsLayer(f);
         }
+        // Year UI first so Color-by Change always has From≠To before paint.
+        if (typeof updateMapYearCompareUi === 'function') updateMapYearCompareUi();
         // Preserve whatever Color-by is active — do not force Enrollment on every sync.
         const activeMetric = document.querySelector(
           '.colorby-toggle-states button.is-active, .colorby-toggle-districts button.is-active'
@@ -2106,6 +2510,22 @@
           updateChangeLegendVisibility();
         } else if (typeof fillMapColorLegend === 'function') {
           fillMapColorLegend();
+        }
+        // Nationwide schools: kick only after the map engine is ready so we don't
+        // compete with Mapbox style/tiles during the first paint (stuck at 4%).
+        // loadNationwideSchools coalesces duplicate kicks; skip obvious no-ops here.
+        const schoolsOn = !!document.getElementById('map-layer-schools')?.checked;
+        const schoolStatus = window.NcesMap?.getSchoolLoadStatus?.();
+        if (
+          schoolsOn
+          && !f.state
+          && !f.leaid
+          && window.NcesMap?.isReady?.()
+          && window.NcesMap?.loadNationwideSchools
+          && schoolStatus !== 'loading'
+          && schoolStatus !== 'paused'
+        ) {
+          window.NcesMap.loadNationwideSchools(f);
         }
       }
       window.syncMapScopeMode = syncMapScopeMode;
@@ -2157,6 +2577,17 @@
         1500, '#2563eb', 2500, '#1d4ed8', 4000, '#1e3a8a',
       ];
 
+      /** Paint school-control swatches from NcesMap.LEVEL_COLORS (single source of truth). */
+      function syncSchoolLevelSwatches() {
+        const colors = window.NcesMap?.LEVEL_COLORS;
+        if (!colors) return;
+        document.querySelectorAll('[data-level-swatch]').forEach((el) => {
+          const c = colors[Number(el.getAttribute('data-level-swatch'))];
+          if (c) el.style.background = c;
+        });
+      }
+      syncSchoolLevelSwatches();
+
       function activeChoroplethMetric() {
         return document.querySelector(
           '.colorby-toggle-states button.is-active, .colorby-toggle-districts button.is-active'
@@ -2189,8 +2620,12 @@
 
       function legendItemHtml(item) {
         const shapeCls = item.shape ? ` map-legend-shape map-shape-${item.shape}` : '';
+        const ringCls = item.ring ? ' is-ring' : '';
+        const style = item.ring
+          ? `border-color:${item.color};background:transparent`
+          : `background:${item.color}`;
         return `<li class="map-color-legend-item" title="${item.title || item.label}">`
-          + `<span class="map-color-legend-swatch${shapeCls}" style="background:${item.color}"></span>`
+          + `<span class="map-color-legend-swatch${shapeCls}${ringCls}" style="${style}"></span>`
           + `<span class="map-color-legend-item-label">${item.label}</span>`
           + `</li>`;
       }
@@ -2204,17 +2639,32 @@
         }));
       }
 
-      /** Shape = school type, always shown while the Schools layer is on. */
-      function schoolShapeItems() {
+      /** School type swatches — solid fill, or ring outline when fill is enrollment/change. */
+      function schoolShapeItems({ ring = false } = {}) {
         const colors = window.NcesMap?.LEVEL_COLORS || {};
         const labels = window.NcesMap?.LEVEL_LABELS || {};
-        const shapes = window.NcesMap?.SCHOOL_SHAPES || {};
-        return [1, 2, 3, 4].map((lvl) => ({
-          color: colors[lvl] || '#94a3b8',
-          label: labels[lvl] || String(lvl),
-          title: labels[lvl] || String(lvl),
-          shape: (shapes[lvl] && shapes[lvl].shape) || 'circle',
-        }));
+        return [1, 2, 3, 4].map((lvl) => {
+          const label = labels[lvl] || String(lvl);
+          return {
+            color: colors[lvl] || '#57534e',
+            label,
+            title: label,
+            shape: 'circle',
+            ring: !!ring,
+          };
+        });
+      }
+
+      function syncSchoolMarkerModeNote(mode) {
+        const note = document.getElementById('school-marker-mode-note');
+        if (!note) return;
+        if (mode === 'enrollment') {
+          note.textContent = 'Fill = enrollment · Ring = school type · Size = enrollment';
+        } else if (mode === 'change') {
+          note.textContent = 'Fill = change % · Ring = school type · Size = enrollment';
+        } else {
+          note.textContent = 'Fill = school type · Size = enrollment';
+        }
       }
 
       function fillMapColorLegend() {
@@ -2239,17 +2689,21 @@
           });
         }
 
-        // Schools: shapes are always the school type; color depends on the mode.
+        // Schools: fill by type / enrollment / change; ring = type when not type-fill.
         if (schoolsOn) {
-          sections.push({ title: 'School type (shape)', items: schoolShapeItems() });
-          // School Change fill — show Change % even when boundaries are Off.
-          if (schoolMode === 'change' && !(boundariesOn && metric === 'change')) {
-            sections.push({ title: 'Change %', items: changeBinItems() });
+          if (schoolMode === 'type') {
+            sections.push({ title: 'School type', items: schoolShapeItems() });
+          } else if (schoolMode === 'change') {
+            if (!(boundariesOn && metric === 'change')) {
+              sections.push({ title: 'Change % (fill)', items: changeBinItems() });
+            }
+            sections.push({ title: 'School type (ring)', items: schoolShapeItems({ ring: true }) });
           } else if (schoolMode === 'enrollment') {
             sections.push({
-              title: 'School enrollment (color)',
+              title: 'School enrollment (fill)',
               items: stopsToLegendItems(SCHOOL_ENROLL_LEGEND_STOPS),
             });
+            sections.push({ title: 'School type (ring)', items: schoolShapeItems({ ring: true }) });
           }
         }
 
@@ -2296,8 +2750,13 @@
           const mode = btn.getAttribute('data-school-fill') || 'type';
           schoolFillToggle.querySelectorAll('button').forEach((b) => b.classList.toggle('is-active', b === btn));
           window.NcesMap.setSchoolMarkerMode(mode);
+          syncSchoolMarkerModeNote(mode);
+          if (typeof updateMapYearCompareUi === 'function') updateMapYearCompareUi();
           updateChangeLegendVisibility();
         });
+        syncSchoolMarkerModeNote(
+          schoolFillToggle.querySelector('button.is-active')?.getAttribute('data-school-fill') || 'type'
+        );
       }
       const schoolsLayerEl = document.getElementById('map-layer-schools');
       if (schoolsLayerEl && !schoolsLayerEl.dataset.legendWired) {
@@ -2495,7 +2954,15 @@
 
       let msg = parts.join(' · ') || 'No map data.';
       if (status.notes && status.notes.length) msg += ' — ' + status.notes.join('; ');
-      setMapStatus(status.setupNeeded ? 'Database setup required (see banner above).' : msg);
+      // Don't clobber the sticky schools progress toast mid-load.
+      const schoolsLoading = !document.getElementById('map-school-load')?.classList.contains('hidden')
+        && !!document.getElementById('map-layer-schools')?.checked;
+      if (!schoolsLoading) {
+        setMapStatus(status.setupNeeded ? 'Database setup required (see banner above).' : msg);
+      }
+      if (status.states != null && Number(status.states) > 0) {
+        try { updateMapBgLoadStages({ states: 'done', metrics: 'done' }); } catch (_) { /* ignore */ }
+      }
     }
 
     async function renderMap() {
@@ -2534,7 +3001,10 @@
           }
         } else if (schoolsOn && !f.state && window.NcesMap.loadNationwideSchools) {
           try {
-            window.NcesMap.loadNationwideSchools(f);
+            const st = window.NcesMap.getSchoolLoadStatus?.();
+            if (st !== 'loading' && st !== 'paused') {
+              window.NcesMap.loadNationwideSchools(f);
+            }
           } catch (schoolErr) {
             console.warn('Nationwide school load failed', schoolErr);
           }
@@ -2563,7 +3033,7 @@
         if (firstInit) {
           mapInitStarted = true;
           mapProgressQuiet = false;
-          setLoadProgressPercent(4, 'Starting map…');
+          startMapProgressPulse({ from: 4, cap: 34, label: 'Starting map…' });
           await window.NcesMap.ensureInit('nces-map', {
             onSelectState: (code) => {
               selectMapScope({ state: code }).catch((err) =>
@@ -2605,7 +3075,12 @@
             onDataRanges: renderMapRanges,
             onStatus: formatMapStatus,
             onCompleteness: renderCompletenessNote,
-            onLoadProgress: (pct, label) => setLoadProgressPercent(pct, label),
+            onLoadProgress: (pct, label) => {
+              // Real checkpoints from the map engine — keep the pulse if still early.
+              setLoadProgressPercent(pct, label);
+              if (pct >= 36) stopMapProgressPulse();
+              noteMapBgProgress(pct, label);
+            },
             onSchoolsLoaded: (rows, meta) => {
               try {
                 // Do not auto-check Schools — state selection must leave it off.
@@ -2614,45 +3089,7 @@
               try { fillSchoolFilter(); } catch (_) { /* ignore */ }
               try { fillMapCascadeSchools(); } catch (_) { /* ignore */ }
               try {
-                const wrap = document.getElementById('map-school-load');
-                const label = document.getElementById('map-school-load-label');
-                const bar = document.getElementById('map-school-load-bar');
-                const track = document.getElementById('map-school-load-track');
-                const n = (rows || []).length;
-                const status = meta && meta.status;
-                const schoolsOn = !!document.getElementById('map-layer-schools')?.checked;
-                if (status === 'loading' && schoolsOn && wrap && label && bar) {
-                  wrap.classList.remove('hidden');
-                  const done = Number(meta.done) || 0;
-                  const total = Math.max(1, Number(meta.total) || 1);
-                  const pct = Math.min(100, Math.round((done / total) * 100));
-                  const st = meta.state ? ` · now ${meta.state}` : '';
-                  const fail = (meta.failed && meta.failed.length)
-                    ? ` · ${meta.failed.length} slow/failed`
-                    : '';
-                  label.textContent =
-                    `Loading schools nationwide — please wait`
-                    + ` (${done}/${total} states${st})`
-                    + ` · ${n.toLocaleString()} schools${fail}`;
-                  bar.style.width = `${pct}%`;
-                  if (track) {
-                    track.setAttribute('aria-valuenow', String(pct));
-                  }
-                  setMapStatus(
-                    `Schools loading… ${done}/${total} states · ${n.toLocaleString()} markers`
-                    + ' — large states (CA, TX) load first'
-                  );
-                } else if (wrap) {
-                  wrap.classList.add('hidden');
-                  if (status === 'done' && schoolsOn) {
-                    const fail = (meta.failed && meta.failed.length)
-                      ? ` (${meta.failed.length} state(s) failed)`
-                      : '';
-                    setMapStatus(n
-                      ? `${n.toLocaleString()} school marker(s) loaded${fail}`
-                      : 'No schools found for this scope');
-                  }
-                }
+                updateMapSchoolLoadPanel(rows, meta);
               } catch (_) { /* ignore */ }
             },
             onLayerVisibility: (vis) => {
@@ -2668,6 +3105,7 @@
             },
           });
           try { wireMapToggles(); } catch (_) { /* ignore */ }
+          try { wireMapSchoolLoadControls(); } catch (_) { /* ignore */ }
           try {
             // Landing: states on, schools off, color by enrollment.
             window.NcesMap.setLayerVisible('schools', !!document.getElementById('map-layer-schools')?.checked);
@@ -2685,12 +3123,16 @@
           } catch (_) { /* ignore */ }
           try { wireMapCascade(); } catch (_) { /* ignore */ }
         }
-        setLoadProgressPercent(55, 'Loading map data…');
+        stopMapProgressPulse();
+        setLoadProgressPercent(48, 'Map engine ready');
+        startMapProgressPulse({ from: 48, cap: 72, label: 'Loading map data…' });
         syncMapCascadeFromFilters();
         window.NcesMap.resize();
         // Don't let a slow RPC leave the overlay stuck at 40–55%.
         const renderTimeout = new Promise((resolve) => setTimeout(resolve, 12000));
         await Promise.race([renderMap(), renderTimeout]);
+        stopMapProgressPulse();
+        setLoadProgressPercent(78, 'Applying filters…');
         // If a district is already selected and Schools is on, load markers.
         try {
           const scope = getFilters();
@@ -2698,12 +3140,14 @@
           const schoolsOn = !!document.getElementById('map-layer-schools')?.checked;
           if (schoolsOn && scope.leaid) await ensureMapSchoolsForDistrict(scope.leaid);
         } catch (_) { /* ignore */ }
-        setLoadProgressPercent(85, 'Finishing map…');
-        // Interactive map is ready; district mesh continues in background.
+        setLoadProgressPercent(92, 'Finishing map…');
+        // Interactive map is ready. District mesh is deferred in nces-map
+        // (loadNationwideBoundaries) so state colors paint first — do not
+        // re-kick here or the stagger is undone.
         finishMapLoadProgress('Map ready — click a state for districts by enrollment');
-        window.NcesMap.kickNationwideDistricts?.();
       } catch (e) {
         mapInitStarted = false;
+        stopMapProgressPulse();
         setMapStatus('Map error: ' + (e.message || e));
         finishMapLoadProgress('Map error');
         try { wireMapToggles(); } catch (_) { /* ignore */ }
@@ -2962,10 +3406,11 @@
       pctEl.textContent = formatPct(from, to);
     }
 
-    function setDistrictChangePanels(pair, distFrom, distTo) {
+    function setDistrictChangePanels(pair, distFrom, distTo, opts = {}) {
       const enrollGrid = document.getElementById('district-enroll-change-grid');
       const staffGrid = document.getElementById('district-staff-change-grid');
-      const show = !!pair;
+      // School focus: hide LEA change panels (trend/grade charts already switch to school).
+      const show = !!pair && !opts.hide;
       if (enrollGrid) enrollGrid.hidden = !show;
       if (staffGrid) staffGrid.hidden = !show;
       if (!show) return;
@@ -4004,6 +4449,85 @@
       return rows;
     }
 
+    /** Reuse a prior LEA school roster when only the year selection changed. */
+    function cachedSchoolsForLea(leaid) {
+      const id = String(leaid || '');
+      if (!id) return null;
+      if (schools?.length && schools.some((s) => sameLeaId(s.leaid, id))) {
+        return schools;
+      }
+      for (const [key, cached] of leaDrillCache.entries()) {
+        if (!String(key).startsWith(`${id}|`)) continue;
+        if (cached?.schools?.length) return cached.schools;
+      }
+      return null;
+    }
+
+    /**
+     * District enrollment by grade — prefer aggregated RPCs (fast) over paging
+     * the district_enrollment table for every grade × year.
+     */
+    async function fetchDistrictEnrollmentRows(leaid, fetchYears, changePair) {
+      const years = (fetchYears || []).map(Number).filter(Number.isFinite);
+      try {
+        if (changePair && years.length === 2
+          && years[0] === changePair.from && years[years.length - 1] === changePair.to) {
+          const gradeRows = await fetchRpc('nces_map_enrollment_by_grade_change', {
+            p_year_from: changePair.from,
+            p_year_to: changePair.to,
+            p_leaid: leaid,
+          });
+          const out = [];
+          (gradeRows || []).forEach((r) => {
+            const g = Number(r.grade);
+            if (!Number.isFinite(g)) return;
+            out.push({
+              school_year: changePair.from,
+              grade: g,
+              race: 99,
+              sex: 99,
+              enrollment: Number(r.enrollment_from) || 0,
+            });
+            out.push({
+              school_year: changePair.to,
+              grade: g,
+              race: 99,
+              sex: 99,
+              enrollment: Number(r.enrollment_to) || 0,
+            });
+          });
+          if (out.length) return out;
+        }
+        if (years.length) {
+          const sets = await Promise.all(years.map(async (y) => {
+            const rows = await fetchRpc('nces_map_enrollment_by_grade', {
+              p_leaid: leaid,
+              p_year: y,
+            });
+            return (rows || []).map((r) => ({
+              school_year: y,
+              grade: Number(r.grade),
+              race: 99,
+              sex: 99,
+              enrollment: Number(r.enrollment) || 0,
+            }));
+          }));
+          const flat = sets.flat().filter((r) => Number.isFinite(r.grade));
+          if (flat.length) return flat;
+        }
+      } catch (err) {
+        console.warn('District grade RPC failed; falling back to table', err);
+      }
+      const { data, error } = await client.from(T.districtEnrollment)
+        .select(DISTRICT_ENROLL_SELECT)
+        .eq('leaid', leaid)
+        .eq('race', 99)
+        .eq('sex', 99)
+        .in('school_year', years.length ? years : fetchYears);
+      if (error) throw error;
+      return data || [];
+    }
+
     // One row per school: prefer the newest school_year present in the result set.
     function pickLatestSchoolDirectory(rows) {
       const byId = new Map();
@@ -4291,6 +4815,21 @@
       }
       selectedSchoolGradeRows = rows.filter((r) => Number(r.grade) >= -1 && Number(r.grade) <= 12);
       selectedSchoolGradeKey = key;
+      // Replace totals for this school so trend / KPIs match grade RPC years.
+      fetchYears.forEach((y) => schoolEnrollmentTotals.delete(`${id}|${Number(y)}`));
+      selectedSchoolGradeRows.forEach((r) => {
+        const g = Number(r.grade);
+        if (!Number.isFinite(g) || g < 1 || g > 12) return;
+        Object.entries(r.byYear || {}).forEach(([y, val]) => {
+          const year = Number(y);
+          if (!Number.isFinite(year)) return;
+          const mapKey = `${id}|${year}`;
+          schoolEnrollmentTotals.set(
+            mapKey,
+            (Number(schoolEnrollmentTotals.get(mapKey)) || 0) + (Number(val) || 0)
+          );
+        });
+      });
       return selectedSchoolGradeRows;
     }
 
@@ -4881,9 +5420,26 @@
     }
 
     function schoolEnrollmentTotal(ncessch, year) {
-      const key = `${ncessch}|${Number(year)}`;
+      const id = String(ncessch || '');
+      const y = Number(year);
+      // Prefer selected-school grade RPC rows (covers every checked year).
+      if (id && selectedSchoolGradeRows.length
+        && id === String(getFilters().school || '')) {
+        let sum = 0;
+        let saw = false;
+        selectedSchoolGradeRows.forEach((r) => {
+          const g = Number(r.grade);
+          if (!Number.isFinite(g) || g < 1 || g > 12) return;
+          if (r.byYear && Object.prototype.hasOwnProperty.call(r.byYear, y)) {
+            sum += Number(r.byYear[y]) || 0;
+            saw = true;
+          }
+        });
+        if (saw) return sum;
+      }
+      const key = `${id}|${y}`;
       if (schoolEnrollmentTotals.has(key)) return schoolEnrollmentTotals.get(key);
-      return schoolEnrollmentRows(ncessch, year)
+      return schoolEnrollmentRows(id, y)
         .reduce((sum, r) => sum + (Number(r.enrollment) || 0), 0);
     }
 
@@ -5432,7 +5988,7 @@
       document.getElementById('kpi-revenue').textContent = formatCurrency(finance?.rev_total);
       document.getElementById('kpi-expenditure').textContent = formatCurrency(finance?.exp_total);
 
-      setDistrictChangePanels(distPair, distFrom, distTo);
+      setDistrictChangePanels(distPair, distFrom, distTo, { hide: !!f.school });
     }
 
     /** District-wide grade chart for nationwide / state scope (no LEA selected). */
@@ -5803,6 +6359,149 @@
       const trendTitle = document.getElementById('chart-district-trend-title');
       const gradeTitleEl = document.getElementById('chart-district-grade-title');
 
+      const schoolFocusId = f.school
+        || ((f.schools && f.schools.length === 1) ? f.schools[0] : '');
+      const schoolFocus = !!schoolFocusId;
+      const schoolName = schoolFocus
+        ? ((schools || []).find((s) => String(s.ncessch) === String(schoolFocusId))?.school_name
+          || (window.NcesMap?.getLoadedSchools?.() || [])
+            .find((s) => String(s.ncessch) === String(schoolFocusId))?.school_name
+          || String(schoolFocusId))
+        : '';
+
+      // One school selected: always school-level trend + grade (even if LEA not set yet).
+      if (schoolFocus) {
+        if (trendTitle) {
+          trendTitle.textContent = schoolName
+            ? `School enrollment over time · ${schoolName}`
+            : 'School enrollment over time';
+        }
+        const trendCanvas = document.getElementById('chart-enrollment-trend');
+        resetTrendCanvasForLineChart(trendCanvas);
+        const schoolTrendTotals = years.map((y) => schoolEnrollmentTotal(schoolFocusId, y));
+        charts.trend = new Chart(trendCanvas, {
+          type: 'line',
+          data: {
+            labels: years.map(String),
+            datasets: [{
+              label: 'School enrollment',
+              data: schoolTrendTotals,
+              borderColor: '#6d28d9',
+              backgroundColor: 'rgba(109, 40, 217, 0.1)',
+              fill: true,
+              tension: 0.2,
+            }],
+          },
+          options: {
+            responsive: false,
+            maintainAspectRatio: false,
+            scales: { y: { beginAtZero: true } },
+          },
+        });
+
+        const changePair = isChangeMode(f) ? changeYearPair(years) : null;
+        const multiYear = years.length >= 2;
+        const schoolRows = (selectedSchoolGradeRows || [])
+          .filter((r) => Number(r.grade) >= -1 && Number(r.grade) <= 12)
+          .slice()
+          .sort((a, b) => Number(a.grade) - Number(b.grade));
+        let gradeLabels;
+        let gradeDatasets;
+        if (multiYear) {
+          const gradeYearRows = schoolRows.map((r) => {
+            const byYear = Object.assign({}, r.byYear || {});
+            years.forEach((y) => {
+              if (byYear[y] == null) {
+                if (changePair && Number(y) === Number(changePair.from)) {
+                  byYear[y] = Number(r.enrollment_from) || 0;
+                } else if (changePair && Number(y) === Number(changePair.to)) {
+                  byYear[y] = Number(r.enrollment_to) || Number(r.enrollment) || 0;
+                } else {
+                  byYear[y] = 0;
+                }
+              }
+            });
+            const from = changePair ? (Number(byYear[changePair.from]) || 0) : 0;
+            const to = changePair
+              ? (Number(byYear[changePair.to]) || 0)
+              : (Number(byYear[years[years.length - 1]]) || 0);
+            return {
+              grade: Number(r.grade),
+              byYear,
+              enrollment_from: from,
+              enrollment_to: to,
+              enrollment_delta: to - from,
+              enrollment: to,
+            };
+          }).filter((r) => Object.values(r.byYear || {}).some((v) => (Number(v) || 0) > 0));
+          gradeLabels = gradeYearRows.length
+            ? gradeYearRows.map((r) => ncesGradeLabel(r.grade))
+            : ['No school grade data'];
+          gradeDatasets = gradeYearRows.length
+            ? gradeDatasetsForYears(years, gradeYearRows)
+            : [{ label: 'Students', data: [0], backgroundColor: '#6d28d9' }];
+        } else {
+          const targetYear = years[years.length - 1];
+          gradeLabels = schoolRows.length
+            ? schoolRows.map((r) => ncesGradeLabel(r.grade))
+            : ['No school grade data'];
+          gradeDatasets = [{
+            label: 'Students',
+            data: schoolRows.length
+              ? schoolRows.map((r) => {
+                if (r.byYear && r.byYear[targetYear] != null) return Number(r.byYear[targetYear]) || 0;
+                return Number(r.enrollment) || 0;
+              })
+              : [0],
+            backgroundColor: '#6d28d9',
+          }];
+        }
+        if (gradeTitleEl) {
+          gradeTitleEl.innerHTML =
+            `School enrollment by grade (<span id="grade-chart-year">${formatYearsCompareLabel(years)}</span>)`
+            + (schoolName ? ` · ${escapeHtml(schoolName)}` : '');
+        }
+        const schoolGradeTitle = document.getElementById('chart-school-grade-title');
+        if (schoolGradeTitle) {
+          schoolGradeTitle.textContent = multiYear
+            ? `Enrollment by grade (${formatYearsCompareLabel(years)})`
+            : 'Enrollment by grade';
+        }
+        // Visible grade chart when a school is filtered (district grade panel is hidden).
+        const schoolGradeCanvas = document.getElementById('chart-school-grade');
+        if (schoolGradeCanvas) {
+          charts.schoolGrade = new Chart(schoolGradeCanvas, {
+            type: 'bar',
+            data: { labels: gradeLabels, datasets: gradeDatasets },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: multiYear } },
+              scales: { y: { beginAtZero: true } },
+            },
+          });
+        }
+        // Keep hidden district grade canvas in sync for layout stability.
+        const districtGradeCanvas = document.getElementById('chart-enrollment-grade');
+        if (districtGradeCanvas) {
+          charts.grade = new Chart(districtGradeCanvas, {
+            type: 'bar',
+            data: { labels: gradeLabels, datasets: gradeDatasets },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { display: multiYear } },
+              scales: { y: { beginAtZero: true } },
+            },
+          });
+        }
+        if (charts.districtGradeChange) {
+          charts.districtGradeChange.destroy();
+          charts.districtGradeChange = null;
+        }
+        return;
+      }
+
       if (!f.leaid) {
         const changePair = isChangeMode(f) ? changeYearPair(years) : null;
         const trendCanvas = document.getElementById('chart-enrollment-trend');
@@ -5844,26 +6543,29 @@
 
       const trendCanvas = document.getElementById('chart-enrollment-trend');
       resetTrendCanvasForLineChart(trendCanvas);
-      const trendTotals = years.map((y) => districtEnrollmentForYear(districtEnrollmentAllYears, y));
-      charts.trend = new Chart(trendCanvas, {
-        type: 'line',
-        data: {
-          labels: years.map(String),
-          datasets: [{
-            label: 'Total enrollment (grades 1–12)',
-            data: trendTotals,
-            borderColor: '#0f4c81',
-            backgroundColor: 'rgba(15, 76, 129, 0.1)',
-            fill: true,
-            tension: 0.2,
-          }],
-        },
-        options: {
-          responsive: false,
-          maintainAspectRatio: false,
-          scales: { y: { beginAtZero: true } },
-        },
-      });
+
+      {
+        const trendTotals = years.map((y) => districtEnrollmentForYear(districtEnrollmentAllYears, y));
+        charts.trend = new Chart(trendCanvas, {
+          type: 'line',
+          data: {
+            labels: years.map(String),
+            datasets: [{
+              label: 'Total enrollment (grades 1–12)',
+              data: trendTotals,
+              borderColor: '#0f4c81',
+              backgroundColor: 'rgba(15, 76, 129, 0.1)',
+              fill: true,
+              tension: 0.2,
+            }],
+          },
+          options: {
+            responsive: false,
+            maintainAspectRatio: false,
+            scales: { y: { beginAtZero: true } },
+          },
+        });
+      }
 
       const changePair = isChangeMode(f) ? changeYearPair(years) : null;
       const multiYear = years.length >= 2;
@@ -6235,7 +6937,8 @@
       if (onMap) syncMapCascadeFromFilters();
     }
 
-    async function loadDistrictMeta(leaid) {
+    async function loadDistrictMeta(leaid, opts = {}) {
+      const skipArticulationMap = !!opts.skipArticulationMap;
       const hasRegions = districtHasRegions(leaid);
       const regionLabel = document.getElementById('region-label');
       const regionSelect = document.getElementById('filter-region');
@@ -6281,9 +6984,10 @@
       }
 
       // Scope school↔area map to this LEA's areas (avoids scanning the full table).
+      // Defer this heavy page scan when skipArticulationMap — first paint stays fast.
       const areaIds = areas.map((a) => a.id).filter(Boolean);
       let map = [];
-      if (areaIds.length) {
+      if (!skipArticulationMap && areaIds.length) {
         try {
           map = await fetchAllPages((from, to) =>
             client.from(T.schoolArticulationMap)
@@ -6408,8 +7112,12 @@
           articulationFilterAllowed = false;
           artSelect.value = '';
           articulationHintText = hasRegions
-            ? 'High school clusters listed but schools are not mapped yet — showing all schools. Use Program region to filter by map location.'
-            : 'Area names exist but schools are not mapped yet — showing all schools.';
+            ? (skipArticulationMap
+              ? 'Loading school↔area map…'
+              : 'High school clusters listed but schools are not mapped yet — showing all schools. Use Program region to filter by map location.')
+            : (skipArticulationMap
+              ? 'Loading school↔area map…'
+              : 'Area names exist but schools are not mapped yet — showing all schools.');
           setFilterDisabled('filter-articulation', true);
           artHint.textContent = articulationHintText;
         } else {
@@ -6439,6 +7147,35 @@
       } else {
         document.getElementById('sync-meta').textContent =
           `Not fully synced yet · LEA ${leaid}`;
+      }
+
+      // Finish articulation map in the background so year-compare charts aren't blocked.
+      if (skipArticulationMap && areaIds.length && !useHsAreas) {
+        fetchAllPages((from, to) =>
+          client.from(T.schoolArticulationMap)
+            .select('ncessch, articulation_area_id')
+            .in('articulation_area_id', areaIds)
+            .range(from, to)
+        ).then((rows) => {
+          if (getFilters().leaid !== leaid) return;
+          articulationMap = {};
+          (rows || []).forEach((row) => {
+            if (!articulationMap[row.ncessch]) articulationMap[row.ncessch] = [];
+            articulationMap[row.ncessch].push(row.articulation_area_id);
+          });
+          const count = Object.keys(articulationMap).length;
+          if (count && artHint) {
+            articulationFilterAllowed = true;
+            articulationHintText = hasRegions
+              ? `${districtRegions.length} program region(s) · ${count} school(s) mapped to areas`
+              : `${count} school(s) mapped to areas`;
+            setFilterDisabled('filter-articulation', false);
+            artHint.textContent = articulationHintText;
+            refreshFilterCombo('filter-articulation');
+            applyTabFilterLock();
+            fillSchoolFilter();
+          }
+        }).catch(() => { /* ignore */ });
       }
 
       return meta;
@@ -6592,12 +7329,6 @@
           }
         }
 
-        const distEnrollQuery = client.from(T.districtEnrollment)
-          .select(DISTRICT_ENROLL_SELECT)
-          .eq('leaid', leaid)
-          .eq('race', 99)
-          .eq('sex', 99)
-          .in('school_year', fetchYears);
         const staffAllQuery = client.from(T.districtStaff)
           .select(STAFF_SELECT)
           .eq('leaid', leaid)
@@ -6613,6 +7344,14 @@
           dirQuery.in('school_year', fetchYears);
         }
 
+        // Reuse school roster when only years changed — avoids re-paging directory.
+        const reusedSchools = cachedSchoolsForLea(leaid);
+        // Year-checkbox reload: meta doesn't depend on years — keep current LEA meta.
+        const yearOnlyReload = quiet && preserveYearDropdown && !opts.bustCache;
+        const metaOk = !!(currentDistrictMeta && sameLeaId(currentDistrictMeta.leaid, leaid));
+        const skipMeta = yearOnlyReload && metaOk;
+        // Single-school focus: skip LEA-wide school ranking metrics; grades load after.
+        const skipLeaSchoolMetrics = !!f.school;
         schoolEnrollmentTotals = new Map();
         schoolGradeAggregate = [];
         schoolEnrollment = [];
@@ -6637,9 +7376,26 @@
           return withLoadTick(label, p);
         };
 
-        const [schoolRowsRaw, distEnrollRes, staffAllRes, financeRes, dirRes, meta] = await Promise.all([
-          track('School directory…', fetchSchoolDirectory(leaid, fetchYears)),
-          track(changePair ? 'District enrollment change…' : 'District enrollment…', distEnrollQuery),
+        const schoolDirPromise = reusedSchools
+          ? Promise.resolve(reusedSchools)
+          : fetchSchoolDirectory(leaid, fetchYears);
+
+        const metaPromise = skipMeta
+          ? Promise.resolve(currentDistrictMeta)
+          : loadDistrictMeta(leaid, { skipArticulationMap: true });
+
+        const metricsPromise = skipLeaSchoolMetrics
+          ? Promise.resolve({ skipped: true })
+          : loadSchoolMetricsForLea(leaid, selectedYears, f);
+
+        // District grade charts reuse LEA grade RPCs from loadSchoolMetricsForLea
+        // (avoids a second identical grade-by-year fetch). When school-focused we
+        // fetch district grades via the thin RPC fallback below instead.
+        const [schoolRowsRaw, staffAllRes, financeRes, dirRes, meta] = await Promise.all([
+          track(
+            reusedSchools ? 'School directory (cached)…' : 'School directory…',
+            schoolDirPromise
+          ),
           track(changePair ? 'Staff change…' : 'Staff FTE…', staffAllQuery),
           track('Finance…', client.from(T.districtFinance)
             .select('rev_total, exp_total, fiscal_year')
@@ -6650,26 +7406,79 @@
           track('District directory…', fetchYears.length === 1
             ? dirQuery.maybeSingle()
             : dirQuery.order('school_year', { ascending: false }).limit(1).maybeSingle()),
-          track('Regions & articulation…', loadDistrictMeta(leaid)),
           track(
-            changePair ? 'School change…' : 'School enrollments…',
-            loadSchoolMetricsForLea(leaid, selectedYears, f)
+            skipMeta ? 'Regions (cached)…' : 'Regions & articulation…',
+            metaPromise
+          ),
+          track(
+            skipLeaSchoolMetrics ? 'School metrics (deferred)…' : 'School enrollments…',
+            metricsPromise
           ),
         ]);
 
         if (token !== loadToken) return;
 
-        const errors = [distEnrollRes, staffAllRes, financeRes, dirRes]
+        const errors = [staffAllRes, financeRes, dirRes]
           .map((r) => r.error).filter(Boolean);
         if (errors.length) throw new Error(errors[0].message);
 
         // Collapse multi-year directory to one row per school using the newest
         // year that actually has data (do NOT require it to equal selected max —
         // e.g. 2021+2023 selected but only 2022 directory synced → used to show 0 schools).
-        const schoolRows = pickLatestSchoolDirectory(schoolRowsRaw || []);
+        const schoolRows = reusedSchools
+          ? reusedSchools
+          : pickLatestSchoolDirectory(schoolRowsRaw || []);
 
         schools = schoolRows;
-        districtEnrollmentAllYears = distEnrollRes.data || [];
+
+        // Prefer grade aggregate already fetched for school charts; fall back to RPC/table.
+        let distEnrollRows = [];
+        (schoolGradeAggregate || []).forEach((r) => {
+          const g = Number(r.grade);
+          if (!Number.isFinite(g)) return;
+          if (r.byYear && Object.keys(r.byYear).length) {
+            Object.entries(r.byYear).forEach(([y, enr]) => {
+              distEnrollRows.push({
+                school_year: Number(y),
+                grade: g,
+                race: 99,
+                sex: 99,
+                enrollment: Number(enr) || 0,
+              });
+            });
+          } else if (r.enrollment_from != null || r.enrollment_to != null) {
+            if (changePair) {
+              distEnrollRows.push({
+                school_year: changePair.from,
+                grade: g,
+                race: 99,
+                sex: 99,
+                enrollment: Number(r.enrollment_from) || 0,
+              });
+              distEnrollRows.push({
+                school_year: changePair.to,
+                grade: g,
+                race: 99,
+                sex: 99,
+                enrollment: Number(r.enrollment_to) || 0,
+              });
+            }
+          } else if (r.school_year != null) {
+            distEnrollRows.push({
+              school_year: Number(r.school_year),
+              grade: g,
+              race: 99,
+              sex: 99,
+              enrollment: Number(r.enrollment) || 0,
+            });
+          }
+        });
+        if (!distEnrollRows.length) {
+          if (!quiet) tickLoadProgress('District enrollment…');
+          else setQuietLoadBar(true, 70);
+          distEnrollRows = await fetchDistrictEnrollmentRows(leaid, fetchYears, changePair);
+        }
+        districtEnrollmentAllYears = distEnrollRows || [];
         const enrollYears = [...new Set(
           districtEnrollmentAllYears.map((r) => Number(r.school_year))
         )].sort((a, b) => a - b);
@@ -7000,7 +7809,31 @@
               renderMap();
             }
           } else {
-            loadData();
+            // Data tab: do NOT full-reload the district — only fetch this school's grades.
+            const years = getFilters().years;
+            const quiet = true;
+            (async () => {
+              try {
+                if (quiet) {
+                  document.querySelectorAll('.chart-grid').forEach((el) => el.classList.add('is-refreshing'));
+                  setQuietLoadBar(true, 20);
+                }
+                if (schoolIds.length === 1) {
+                  await loadSelectedSchoolGrades(schoolIds[0], years);
+                } else {
+                  selectedSchoolGradeRows = [];
+                  selectedSchoolGradeKey = null;
+                }
+                fillSchoolFilter();
+                renderAll();
+              } catch (err) {
+                console.warn('School grade load failed', err);
+                renderAll();
+              } finally {
+                document.querySelectorAll('.chart-grid').forEach((el) => el.classList.remove('is-refreshing'));
+                setQuietLoadBar(false);
+              }
+            })();
           }
         } else {
           selectedSchoolGradeRows = [];

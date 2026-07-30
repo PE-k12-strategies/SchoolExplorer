@@ -34,38 +34,52 @@
     WV: '54', WI: '55', WY: '56', PR: '72',
   };
 
+  // School type palette — avoid red / yellow / green / blue (reserved for
+  // enrollment sequential + change diverging legends).
   const LEVEL_COLORS = {
-    1: '#2563eb', // Primary / Elementary
-    2: '#16a34a', // Middle
-    3: '#dc2626', // High
-    4: '#9333ea', // Other
+    1: '#6d28d9', // Elementary — violet
+    2: '#db2777', // Middle — pink
+    3: '#c2410c', // High — burnt orange
+    4: '#57534e', // Other / Combined — stone
   };
-  const LEVEL_LABELS = { 1: 'Elementary', 2: 'Middle', 3: 'High', 4: 'Other/Combined' };
+  const LEVEL_LABELS = { 1: 'Elementary', 2: 'Middle', 3: 'High', 4: 'Other / Combined' };
 
   // Discrete change % bins (schools + district/state choropleth).
   // Yellow band is −2% to +2%; then 2–5, 5–10, and >10 both ways.
   const CHANGE_PCT_SCALE = {
     noData: '#94a3b8',
     bins: [
-      { key: 'lt-10', label: '<−10%', title: 'Decrease more than 10%', color: '#a50026' },
+      { key: 'lt-10', label: 'More than 10% decline', title: 'More than 10% decline', color: '#a50026' },
       { key: '-10--5', label: '−10 to −5%', title: 'Decrease 5–10%', color: '#f46d43' },
       { key: '-5--2', label: '−5 to −2%', title: 'Decrease 2–5%', color: '#fdae61' },
       { key: '-2-2', label: '−2 to 2%', title: 'Little change (−2% to +2%)', color: '#ffffbf' },
       { key: '2-5', label: '2 to 5%', title: 'Increase 2–5%', color: '#a6d96a' },
       { key: '5-10', label: '5 to 10%', title: 'Increase 5–10%', color: '#1a9850' },
-      { key: 'gt-10', label: '>+10%', title: 'Increase more than 10%', color: '#006837' },
+      { key: 'gt-10', label: 'More than 10% growth', title: 'More than 10% growth', color: '#006837' },
     ],
   };
   // Back-compat alias used by the UI legend.
   const SCHOOL_CHANGE_SCALE = CHANGE_PCT_SCALE;
 
-  // School marker shapes by NCES level (SDF icons, recolored via icon-color).
+  // School markers are circles for every level; color encodes school type.
+  const SCHOOL_CIRCLE_ICON = 'school-circle';
   const SCHOOL_SHAPES = {
-    1: { icon: 'school-circle', label: 'Elementary', shape: 'circle' },
-    2: { icon: 'school-triangle', label: 'Middle', shape: 'triangle' },
-    3: { icon: 'school-square', label: 'High', shape: 'square' },
-    4: { icon: 'school-diamond', label: 'Other / Combined', shape: 'diamond' },
+    1: { icon: SCHOOL_CIRCLE_ICON, shape: 'circle' },
+    2: { icon: SCHOOL_CIRCLE_ICON, shape: 'circle' },
+    3: { icon: SCHOOL_CIRCLE_ICON, shape: 'circle' },
+    4: { icon: SCHOOL_CIRCLE_ICON, shape: 'circle' },
   };
+
+  function schoolLevelColorExpr() {
+    return [
+      'match', ['coalesce', ['get', 'school_level'], 4],
+      1, LEVEL_COLORS[1],
+      2, LEVEL_COLORS[2],
+      3, LEVEL_COLORS[3],
+      4, LEVEL_COLORS[4],
+      LEVEL_COLORS[4],
+    ];
+  }
 
   const DISTRICT_COLORS = [
     '#60a5fa', '#34d399', '#fbbf24', '#f87171',
@@ -536,17 +550,13 @@
 
   function ensureSchoolIcons() {
     if (!map) return;
-    Object.keys(SCHOOL_SHAPES).forEach((level) => {
-      const icon = SCHOOL_SHAPES[level].icon;
-      const shape = SCHOOL_SHAPES[level].shape;
-      // Replace any prior non-SDF bake so icon-color works after a hot reload.
-      if (map.hasImage(icon)) {
-        try { map.removeImage(icon); } catch (_) { /* ignore */ }
-      }
-      map.addImage(icon, makeSdfShape(shape), {
-        sdf: true,
-        pixelRatio: SCHOOL_ICON_PIXEL_RATIO,
-      });
+    // All levels share one SDF circle; fill/ring color carries school type.
+    if (map.hasImage(SCHOOL_CIRCLE_ICON)) {
+      try { map.removeImage(SCHOOL_CIRCLE_ICON); } catch (_) { /* ignore */ }
+    }
+    map.addImage(SCHOOL_CIRCLE_ICON, makeSdfShape('circle'), {
+      sdf: true,
+      pixelRatio: SCHOOL_ICON_PIXEL_RATIO,
     });
   }
 
@@ -675,14 +685,20 @@
       }
       global.mapboxgl.accessToken = token;
       let settled = false;
+      let initWatchdog = null;
+      let stylePulse = null;
       const fail = (err) => {
         if (settled) return;
         settled = true;
+        if (initWatchdog) clearTimeout(initWatchdog);
+        if (stylePulse) clearInterval(stylePulse);
         reject(err instanceof Error ? err : new Error(String(err)));
       };
       const succeed = () => {
         if (settled) return;
         settled = true;
+        if (initWatchdog) clearTimeout(initWatchdog);
+        if (stylePulse) clearInterval(stylePulse);
         ready = true;
         reportProgress(40, 'Map engine ready');
         resolve(map);
@@ -692,6 +708,7 @@
       };
 
       try {
+        reportProgress(6, 'Creating map…');
         map = new global.mapboxgl.Map({
           container: containerId,
           style: CFG.style || 'mapbox://styles/mapbox/light-v11',
@@ -702,6 +719,7 @@
         fail(err);
         return;
       }
+      reportProgress(8, 'Downloading basemap…');
       // Zoom control bottom-right so it never collides with the left detail panel.
       try {
         map.addControl(new global.mapboxgl.NavigationControl(), 'bottom-right');
@@ -709,16 +727,66 @@
       // Distance scale (click to toggle mi / km).
       try {
         map.addControl(new global.mapboxgl.ScaleControl({
-          maxWidth: 140,
+          maxWidth: 120,
           unit: 'imperial',
         }), 'bottom-left');
       } catch (_) { /* ignore */ }
-      try { setupDetailPanel(); } catch (_) { /* ignore */ }
+      // Wire detail panel DOM only — do NOT resize/setPadding until style 'load'.
+      // Calling map.resize/setPadding before the style loads can hang Mapbox at 0–4%.
+      try { setupDetailPanel({ deferResize: true }); } catch (_) { /* ignore */ }
+
+      // Creep 8% → ~34% while Mapbox style/tiles download so the bar isn't frozen.
+      let styleTick = 0;
+      const styleLabels = [
+        'Downloading basemap…',
+        'Loading map tiles…',
+        'Preparing map style…',
+        'Almost ready…',
+      ];
+      stylePulse = setInterval(() => {
+        if (settled) {
+          clearInterval(stylePulse);
+          return;
+        }
+        styleTick += 1;
+        const pct = Math.min(34, 8 + styleTick * 2);
+        reportProgress(pct, styleLabels[Math.min(styleTick, styleLabels.length) - 1] || styleLabels[0]);
+      }, 450);
+      try {
+        map.on('styledata', () => {
+          if (!settled) reportProgress(18, 'Basemap style received…');
+        });
+        map.on('sourcedata', (e) => {
+          if (settled || !e || e.sourceDataType !== 'metadata') return;
+          reportProgress(24, 'Loading map sources…');
+        });
+      } catch (_) { /* ignore */ }
+
+      // Hard stop so the UI never stays on "Starting map… 4%" forever.
+      initWatchdog = setTimeout(() => {
+        if (settled) return;
+        clearInterval(stylePulse);
+        console.warn('Map style load timed out — forcing ready');
+        try {
+          if (map && !map.getLayer('schools-dots')) {
+            reportProgress(36, 'Building map layers…');
+            addLayers();
+          }
+          ready = true;
+          try { wireDetailResize(); } catch (_) { /* ignore */ }
+          succeed();
+        } catch (err) {
+          fail(err);
+        }
+      }, 15000);
 
       map.on('load', () => {
+        clearTimeout(initWatchdog);
+        clearInterval(stylePulse);
         try {
-          reportProgress(10, 'Building map layers…');
+          reportProgress(36, 'Building map layers…');
           addLayers();
+          reportProgress(38, 'Wiring map controls…');
           // Mark ready as soon as layers exist so render/school loads are not blocked
           // if wiring/visibility throws below.
           ready = true;
@@ -726,6 +794,9 @@
           console.error('Map addLayers failed', err);
           fail(err);
           return;
+        }
+        try { wireDetailResize(); } catch (err) {
+          console.warn('Map detail resize wire failed', err);
         }
         try { wireInteractions(); } catch (err) {
           console.warn('Map wireInteractions failed', err);
@@ -743,6 +814,7 @@
         console.warn('Mapbox error', msg || e);
         if (settled || ready) return;
         if (map && map.getLayer && map.getLayer('schools-dots')) {
+          clearTimeout(initWatchdog);
           ready = true;
           succeed();
           return;
@@ -1107,29 +1179,18 @@
       source: 'schools',
       layout: {
         visibility: 'none',
-        'icon-image': [
-          'match', ['coalesce', ['get', 'school_level'], 4],
-          1, SCHOOL_SHAPES[1].icon,
-          2, SCHOOL_SHAPES[2].icon,
-          3, SCHOOL_SHAPES[3].icon,
-          SCHOOL_SHAPES[4].icon,
-        ],
+        'icon-image': SCHOOL_CIRCLE_ICON,
         'icon-size': schoolIconSizeExpr(),
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
       },
       paint: {
-        'icon-color': [
-          'match', ['coalesce', ['get', 'school_level'], 4],
-          1, LEVEL_COLORS[1],
-          2, LEVEL_COLORS[2],
-          3, LEVEL_COLORS[3],
-          LEVEL_COLORS[4],
-        ],
+        'icon-color': schoolLevelColorExpr(),
         'icon-opacity': 0.95,
+        // Default: school-type mode — no ring (halo width 0).
         'icon-halo-color': '#ffffff',
-        'icon-halo-width': 0.85,
-        'icon-halo-blur': 0.15,
+        'icon-halo-width': 0,
+        'icon-halo-blur': 0.1,
       },
     });
     // School names — only when zoomed to ~1 mile (z14+); hide if they collide.
@@ -1169,23 +1230,115 @@
   }
 
   // ---- Edge-flush details panel ---------------------------------------------
-  function setupDetailPanel() {
+  function setupDetailPanel({ deferResize = false } = {}) {
     detailPanel = document.getElementById('map-detail-panel');
     detailTitle = document.getElementById('map-detail-title');
     detailBody = document.getElementById('map-detail-body');
     detailReopen = document.getElementById('map-detail-reopen');
     detailDropdown = null;
     const closeBtn = document.getElementById('map-detail-close');
-    if (closeBtn) closeBtn.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      closeDetail();
-    });
-    if (detailReopen) {
+    if (closeBtn && !closeBtn.dataset.wired) {
+      closeBtn.dataset.wired = '1';
+      closeBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        closeDetail();
+      });
+    }
+    if (detailReopen && !detailReopen.dataset.wired) {
+      detailReopen.dataset.wired = '1';
       detailReopen.addEventListener('click', () => {
         if (detailPanel && detailPanel.classList.contains('is-open')) closeDetail();
         else openDetail();
       });
     }
+    // Resize/padding touches the Mapbox camera — only after style 'load'.
+    if (!deferResize) wireDetailResize();
+  }
+
+  const DETAIL_WIDTH_MIN = 260;
+  const DETAIL_WIDTH_MAX = 640;
+  const DETAIL_WIDTH_DEFAULT = 380;
+  const DETAIL_WIDTH_KEY = 'nces-map-detail-width';
+
+  function clampDetailWidth(px) {
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
+    const max = Math.min(DETAIL_WIDTH_MAX, Math.floor(vw * 0.92));
+    return Math.max(DETAIL_WIDTH_MIN, Math.min(max, Math.round(px)));
+  }
+
+  function readStoredDetailWidth() {
+    try {
+      const n = Number(sessionStorage.getItem(DETAIL_WIDTH_KEY));
+      if (Number.isFinite(n) && n > 0) return clampDetailWidth(n);
+    } catch (_) { /* ignore */ }
+    return DETAIL_WIDTH_DEFAULT;
+  }
+
+  function applyDetailWidth(px, { persist = true } = {}) {
+    const w = clampDetailWidth(px);
+    const wrap = detailPanel && detailPanel.closest('.map-wrap');
+    if (wrap) wrap.style.setProperty('--map-detail-width', `${w}px`);
+    if (detailPanel) detailPanel.style.width = `${w}px`;
+    if (persist) {
+      try { sessionStorage.setItem(DETAIL_WIDTH_KEY, String(w)); } catch (_) { /* ignore */ }
+    }
+    applyDetailCameraPadding();
+    if (map) {
+      try { map.resize(); } catch (_) { /* ignore */ }
+    }
+    return w;
+  }
+
+  function wireDetailResize() {
+    if (!detailPanel || detailPanel.dataset.resizeWired) return;
+    detailPanel.dataset.resizeWired = '1';
+    applyDetailWidth(readStoredDetailWidth(), { persist: false });
+
+    let handle = detailPanel.querySelector('.map-detail-resize');
+    if (!handle) {
+      handle = document.createElement('div');
+      handle.className = 'map-detail-resize';
+      handle.title = 'Drag to resize';
+      handle.setAttribute('role', 'separator');
+      handle.setAttribute('aria-orientation', 'vertical');
+      handle.setAttribute('aria-label', 'Resize details panel');
+      detailPanel.appendChild(handle);
+    }
+
+    let dragging = false;
+    let startX = 0;
+    let startW = DETAIL_WIDTH_DEFAULT;
+
+    const onMove = (ev) => {
+      if (!dragging) return;
+      const x = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      applyDetailWidth(startW + (x - startX), { persist: false });
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove('is-resizing-detail');
+      const w = detailPanel.getBoundingClientRect().width;
+      applyDetailWidth(w, { persist: true });
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+    };
+    const onDown = (ev) => {
+      if (ev.button != null && ev.button !== 0) return;
+      ev.preventDefault();
+      dragging = true;
+      startX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      startW = detailPanel.getBoundingClientRect().width || readStoredDetailWidth();
+      document.body.classList.add('is-resizing-detail');
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('touchmove', onMove, { passive: false });
+      window.addEventListener('touchend', onUp);
+    };
+    handle.addEventListener('pointerdown', onDown);
+    handle.addEventListener('touchstart', onDown, { passive: false });
   }
 
   function detailEnabled() {
@@ -1302,6 +1455,15 @@
   }
 
   // Route a detail card to the left panel when present, else a map popup.
+  function detailYearSuffix(title) {
+    const base = title || 'Details';
+    if (changeYears.from != null && changeYears.to != null && changeYears.from !== changeYears.to) {
+      return `${base} · ${changeYears.from}→${changeYears.to}`;
+    }
+    const y = resolveMetricYear();
+    return Number.isFinite(y) ? `${base} · ${y}` : base;
+  }
+
   function present(lngLat, d) {
     const withLoading = d.html.replace(
       '<!--GRADE_CHART-->',
@@ -1311,15 +1473,16 @@
       d.loadChange ? '<div class="map-grade-empty">Loading enrollment change…</div>' : ''
     );
     if (detailEnabled()) {
-      if (detailTitle) detailTitle.textContent = d.title;
+      if (detailTitle) detailTitle.textContent = detailYearSuffix(d.title);
       detailBody.innerHTML = `<div class="map-popup map-detail-card">${withLoading}</div>`;
       detailBody.setAttribute('data-has-content', '1');
       openDetail();
       if (d.grade) loadGradeIntoSlot(detailBody.querySelector('.map-grade-slot'), d.grade);
       if (d.loadChange) d.loadChange(detailBody.querySelector('.map-change-slot'));
+      if (d.afterPresent) d.afterPresent(detailBody);
       return;
     }
-    const baseHtml = `<div class="map-popup"><strong>${d.title}</strong>${d.html}</div>`;
+    const baseHtml = `<div class="map-popup"><strong>${detailYearSuffix(d.title)}</strong>${d.html}</div>`;
     const inst = popup(lngLat, baseHtml
       .replace('<!--GRADE_CHART-->', d.grade ? '<div class="map-grade-empty">Loading grades…</div>' : '')
       .replace('<!--CHANGE_BLOCK-->', d.loadChange ? '<div class="map-grade-empty">Loading enrollment change…</div>' : ''), d.width);
@@ -1340,6 +1503,13 @@
     const v = Number(n);
     if (v === 0) return '0';
     return v.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  }
+
+  /** Percent change display: always one decimal (e.g. -36.3). */
+  function fmtPct(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return null;
+    return (Math.round(v * 10) / 10).toFixed(1);
   }
 
   function stuTeacher(enroll, teachers) {
@@ -1662,7 +1832,7 @@
           <div><span>${changeYears.from}</span><b>${fmtFte(tFrom)}</b></div>
           <div><span>${changeYears.to}</span><b>${fmtFte(tTo)}</b></div>
           <div><span>Change</span><b class="${td > 0 ? 'is-up' : td < 0 ? 'is-down' : ''}">${tSign}${fmtFte(td)}</b></div>
-          <div><span>% change</span><b>${ch.teachers_pct != null ? `${tSign}${ch.teachers_pct}%` : 'n/a'}</b></div>
+          <div><span>% change</span><b>${ch.teachers_pct != null ? `${tSign}${fmtPct(ch.teachers_pct)}%` : 'n/a'}</b></div>
         </div>`;
       const ratio = ratioChangeProps(from, to, tFrom, tTo);
       if (ratio.ratio_from || ratio.ratio_to) {
@@ -1675,7 +1845,7 @@
           <div><span>${changeYears.from}</span><b>${ratio.ratio_from}</b></div>
           <div><span>${changeYears.to}</span><b>${ratio.ratio_to}</b></div>
           <div><span>Change</span><b class="${rCls}">${rSign}${ratio.ratio_delta}</b></div>
-          <div><span>% change</span><b>${ratio.ratio_pct != null ? `${rSign}${ratio.ratio_pct}%` : 'n/a'}</b></div>
+          <div><span>% change</span><b>${ratio.ratio_pct != null ? `${rSign}${fmtPct(ratio.ratio_pct)}%` : 'n/a'}</b></div>
         </div>`;
       }
     }
@@ -1686,7 +1856,7 @@
           <div><span>${changeYears.from}</span><b>${num(from)}</b></div>
           <div><span>${changeYears.to}</span><b>${num(to)}</b></div>
           <div><span>Change</span><b class="${d > 0 ? 'is-up' : d < 0 ? 'is-down' : ''}">${sign}${num(d)}</b></div>
-          <div><span>% change</span><b>${pct != null ? `${sign}${pct}%` : 'n/a'}</b></div>
+          <div><span>% change</span><b>${pct != null ? `${sign}${fmtPct(pct)}%` : 'n/a'}</b></div>
         </div>
         ${teachers}
       </div>`;
@@ -1790,7 +1960,7 @@
             <div><span>${yFrom}</span><b>${s.fmt(s.from)}</b></div>
             <div><span>${yTo}</span><b>${s.fmt(s.to)}</b></div>
             <div><span>Change</span><b class="${deltaCls}">${sign}${s.fmt(d)}</b></div>
-            <div><span>% change</span><b>${s.pct != null ? `${sign}${s.pct}%` : 'n/a'}</b></div>
+            <div><span>% change</span><b>${s.pct != null ? `${sign}${fmtPct(s.pct)}%` : 'n/a'}</b></div>
           </div>
         </div>`;
     }).join('');
@@ -1849,9 +2019,7 @@
     const enroll = Number(p.enrollment) || 0;
     const teachers = p.teachers_fte != null ? Number(p.teachers_fte) : null;
     const ratio = stuTeacher(enroll, teachers);
-    const year = lastFilters && lastFilters.year != null
-      ? lastFilters.year
-      : changeYears.to;
+    const year = resolveMetricYear();
     const yFrom = changeYears.from;
     const yTo = changeYears.to;
     const useGradeChange = yFrom != null && yTo != null && yFrom !== yTo;
@@ -2130,12 +2298,105 @@
     };
   }
 
+  async function refreshDistrictDetailForYear(leaid, year, root) {
+    if (!client || !leaid || !root || !root.isConnected) return;
+    const note = root.querySelector('.map-year-missing-note');
+    const setKpi = (key, text) => {
+      const el = root.querySelector(`[data-kpi="${key}"]`);
+      if (el) el.textContent = text;
+    };
+    try {
+      const st = stateForLeaid(leaid);
+      let row = null;
+      try {
+        const rows = await rpc('nces_map_metric_change', {
+          p_year_from: year,
+          p_year_to: year,
+          p_state: st || null,
+        });
+        row = (rows || []).find((r) => padLeaid(r.leaid) === padLeaid(leaid)) || null;
+      } catch (_) {
+        row = null;
+      }
+      if (!row && client.from) {
+        const keys = leaKeys(leaid);
+        const { data } = await client
+          .from((global.NCES_CONFIG && global.NCES_CONFIG.tables && global.NCES_CONFIG.tables.districtDirectory)
+            || 'nces_district_directory')
+          .select('leaid, school_year, enrollment, teachers_total_fte, staff_total_fte, number_of_schools')
+          .in('leaid', keys.length ? keys : [padLeaid(leaid)])
+          .eq('school_year', year)
+          .limit(1)
+          .maybeSingle();
+        if (data) {
+          row = {
+            enrollment_to: data.enrollment,
+            teachers_to: data.teachers_total_fte,
+            staff_to: data.staff_total_fte,
+            schools: data.number_of_schools,
+          };
+        }
+      }
+
+      const enroll = row ? Number(row.enrollment_to ?? row.enrollment) || 0 : null;
+      const teachers = row ? Number(row.teachers_to ?? row.teachers_fte ?? row.teachers_total_fte) || 0 : null;
+      const staff = row ? Number(row.staff_to ?? row.staff_fte ?? row.staff_total_fte) || 0 : null;
+      const schools = row && row.schools != null ? Number(row.schools) : null;
+      const hasAny = row && (enroll || teachers || staff || schools);
+
+      if (hasAny) {
+        setKpi('enrollment', enroll != null ? num(enroll) : 'n/a');
+        setKpi('teachers', teachers != null ? fmtFte(teachers) : 'n/a');
+        setKpi('staff', staff != null ? fmtFte(staff) : 'n/a');
+        setKpi('ratio', stuTeacher(enroll, teachers) != null ? String(stuTeacher(enroll, teachers)) : 'n/a');
+        if (note) {
+          note.classList.add('hidden');
+          note.textContent = '';
+        }
+        return;
+      }
+
+      // No row / empty metrics for this year — list years that do exist.
+      let yearsHave = [];
+      try {
+        const keys = leaKeys(leaid);
+        const { data: yearRows } = await client
+          .from((global.NCES_CONFIG && global.NCES_CONFIG.tables && global.NCES_CONFIG.tables.districtDirectory)
+            || 'nces_district_directory')
+          .select('school_year, enrollment')
+          .in('leaid', keys.length ? keys : [padLeaid(leaid)])
+          .order('school_year', { ascending: false });
+        yearsHave = (yearRows || [])
+          .filter((r) => r.enrollment != null && Number(r.enrollment) > 0)
+          .map((r) => Number(r.school_year))
+          .filter(Number.isFinite);
+      } catch (_) { /* ignore */ }
+
+      setKpi('enrollment', 'n/a');
+      setKpi('teachers', 'n/a');
+      setKpi('staff', 'n/a');
+      setKpi('ratio', 'n/a');
+      if (note) {
+        note.classList.remove('hidden');
+        if (yearsHave.length) {
+          note.textContent = `No enrollment in district directory for ${year}. Years with enrollment: ${yearsHave.join(', ')}.`;
+        } else {
+          note.textContent = `No enrollment in district directory for ${year}.`;
+        }
+      }
+    } catch (_) {
+      if (note) {
+        note.classList.remove('hidden');
+        note.textContent = `Could not load directory metrics for ${year}.`;
+      }
+    }
+  }
+
   function presentSelectionDetail(lngLat) {
     const s = selectionSummary();
     if (!s.stateCount && !s.count) {
       if (!detailEnabled()) return;
       const n = nationwideSummary();
-      const year = lastFilters && lastFilters.year != null ? lastFilters.year : null;
       const yFrom = changeYears.from;
       const yTo = changeYears.to;
       const useGradeChange = yFrom != null && yTo != null && yFrom !== yTo;
@@ -2145,7 +2406,7 @@
         changeHtml = changeBlockHtml(aggregateChangeProps(stateProps));
       }
       if (!n.ready) {
-        if (detailTitle) detailTitle.textContent = 'United States';
+        if (detailTitle) detailTitle.textContent = detailYearSuffix('United States');
         detailBody.innerHTML =
           '<p class="map-detail-empty">Loading nationwide totals…</p>';
         detailBody.setAttribute('data-has-content', '0');
@@ -2166,7 +2427,7 @@
           </div>
           ${changeHtml}
           <p class="map-detail-empty" style="margin-top:10px">
-            Combined totals for all states${year != null ? ` · ${year}` : ''}.
+            Combined totals for all states · ${resolveMetricYear()}.
             Click a state to drill in.
           </p>`,
       });
@@ -2202,7 +2463,7 @@
         ? `<button type="button" class="map-popup-btn" data-select-district="${s.districts[0].leaid}">Open district in filters</button>`
         : '');
 
-    const year = lastFilters && lastFilters.year != null ? lastFilters.year : null;
+    const year = resolveMetricYear();
     const yFrom = changeYears.from;
     const yTo = changeYears.to;
     const useGradeChange = yFrom != null && yTo != null && yFrom !== yTo;
@@ -2245,21 +2506,31 @@
         })
       : null;
 
+    const missingYearNote = (!useGradeChange && s.count === 1 && !s.stateCount
+      && (s.enrollment == null || s.enrollment === 0)
+      && (s.teachers == null || s.teachers === 0))
+      ? `<p class="map-detail-empty map-year-missing-note" style="margin-top:8px">Checking directory for ${year}…</p>`
+      : `<p class="map-detail-empty map-year-missing-note hidden" style="margin-top:8px"></p>`;
+
     present(lngLat || (map && map.getCenter()), {
       title,
       width: '360px',
       grade: gradeArgs,
+      afterPresent: (!useGradeChange && districtLeaids.length === 1)
+        ? (root) => refreshDistrictDetailForYear(districtLeaids[0], year, root)
+        : null,
       html: `
-        <div class="map-kpi-grid">
+        <div class="map-kpi-grid" data-detail-kpi>
           <div><span>States</span><b>${num(s.stateCount)}</b></div>
           <div><span>Districts</span><b>${s.districtTotal != null ? num(s.districtTotal) : num(s.count)}</b></div>
           <div><span>Schools</span><b>${s.schools != null ? num(s.schools) : 'n/a'}</b></div>
-          <div><span>Enrollment</span><b>${s.enrollment != null ? num(s.enrollment) : 'n/a'}</b></div>
-          <div><span>Teachers FTE</span><b>${s.teachers != null ? fmtFte(s.teachers) : 'n/a'}</b></div>
-          <div><span>Staff FTE</span><b>${s.staff != null ? fmtFte(s.staff) : 'n/a'}</b></div>
-          <div><span>Stud / teacher</span><b>${s.ratio != null ? s.ratio : 'n/a'}</b></div>
+          <div><span>Enrollment</span><b data-kpi="enrollment">${s.enrollment != null ? num(s.enrollment) : 'n/a'}</b></div>
+          <div><span>Teachers FTE</span><b data-kpi="teachers">${s.teachers != null ? fmtFte(s.teachers) : 'n/a'}</b></div>
+          <div><span>Staff FTE</span><b data-kpi="staff">${s.staff != null ? fmtFte(s.staff) : 'n/a'}</b></div>
+          <div><span>Stud / teacher</span><b data-kpi="ratio">${s.ratio != null ? s.ratio : 'n/a'}</b></div>
         </div>
         ${changeHtml}
+        ${missingYearNote}
         ${stateBits ? `<div class="map-grade-title">States</div><ul class="map-selection-list-inline">${stateBits}</ul>` : ''}
         ${distBits ? `<div class="map-grade-title">Districts</div><ul class="map-selection-list-inline">${distBits}</ul>` : ''}
         <div class="map-grade-slot"><!--GRADE_CHART--></div>
@@ -2541,6 +2812,10 @@
         // Cancel any in-flight nationwide / scoped school load and clear markers.
         schoolLoadToken += 1;
         schoolLoadStatus = 'idle';
+        schoolLoadPaused = false;
+        schoolLoadRun = null;
+        nationwideLoadPromise = null;
+        nationwideFailedStates = [];
         lastData.schools = [];
         try {
           if (map && map.getSource('schools')) map.getSource('schools').setData(emptyFc());
@@ -2657,6 +2932,18 @@
     if (!isChangeMetric(colorMetric)) {
       lastChangeNote = null;
       applySchoolChangePaint();
+    } else if (changeYears.from === changeYears.to) {
+      // Host should set From/To first; if not, expand to a usable compare pair.
+      const cfg = (global.NCES_CONFIG && global.NCES_CONFIG.schoolYears) || [2021, 2024];
+      const years = cfg.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+      const to = changeYears.to || Math.max(...years);
+      const from = years.includes(2021) && 2021 < to
+        ? 2021
+        : (years.filter((y) => y < to).pop() || (to - 1));
+      if (from !== to) {
+        changeYears = { from, to };
+        changeKey = null;
+      }
     }
     applyMetricPaint();
     applyVisibility();
@@ -2757,6 +3044,75 @@
   // 'idle' | 'loading' | 'done' | 'error' — so the dropdown never sticks on "Loading…".
   let schoolLoadStatus = 'idle';
   let schoolLoadToken = 0;
+  /** Nationwide progressive load: pause flag (stop bumps schoolLoadToken). */
+  let schoolLoadPaused = false;
+  let schoolLoadRun = null; // { token, done, total, byId size snapshot helpers }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function waitWhileSchoolLoadPaused(token) {
+    while (schoolLoadPaused && token === schoolLoadToken) {
+      await sleep(160);
+    }
+  }
+
+  function notifySchoolLoadMeta(extra) {
+    if (typeof opts.onSchoolsLoaded !== 'function') return;
+    const rows = lastData.schools || [];
+    try {
+      opts.onSchoolsLoaded(rows, Object.assign({
+        status: schoolLoadStatus,
+        schools: rows.length,
+        paused: schoolLoadPaused,
+      }, extra || {}));
+    } catch (_) { /* ignore */ }
+  }
+
+  function pauseNationwideSchools() {
+    if (schoolLoadStatus !== 'loading' && schoolLoadStatus !== 'paused') return false;
+    schoolLoadPaused = true;
+    schoolLoadStatus = 'paused';
+    notifySchoolLoadMeta(schoolLoadRun ? {
+      done: schoolLoadRun.done,
+      total: schoolLoadRun.total,
+      doneStates: schoolLoadRun.doneStates.slice(),
+      activeStates: [...schoolLoadRun.activeStates],
+      failed: schoolLoadRun.failed.slice(),
+    } : {});
+    return true;
+  }
+
+  function resumeNationwideSchools() {
+    if (!schoolLoadPaused && schoolLoadStatus !== 'paused') return false;
+    schoolLoadPaused = false;
+    schoolLoadStatus = 'loading';
+    notifySchoolLoadMeta(schoolLoadRun ? {
+      done: schoolLoadRun.done,
+      total: schoolLoadRun.total,
+      doneStates: schoolLoadRun.doneStates.slice(),
+      activeStates: [...schoolLoadRun.activeStates],
+      failed: schoolLoadRun.failed.slice(),
+    } : {});
+    return true;
+  }
+
+  function stopNationwideSchools() {
+    const wasActive = schoolLoadStatus === 'loading' || schoolLoadStatus === 'paused';
+    schoolLoadPaused = false;
+    schoolLoadToken += 1;
+    schoolLoadStatus = 'stopped';
+    schoolLoadRun = null;
+    nationwideLoadPromise = null;
+    notifySchoolLoadMeta({
+      status: 'stopped',
+      done: null,
+      total: null,
+      activeStates: [],
+    });
+    return wasActive;
+  }
 
   function mapSchoolRow(r) {
     return {
@@ -2775,28 +3131,48 @@
     };
   }
 
-  /** Fast directory-only school rows for immediate dropdown + marker display. */
-  async function fetchSchoolDirectoryRows(state, leaid, year) {
+  /**
+   * Fast directory-only school rows for immediate dropdown + marker display.
+   * 4th arg: onPage callback OR options { onPage, yearOnly, pageSize, token }.
+   */
+  async function fetchSchoolDirectoryRows(state, leaid, year, onPageOrOpts) {
+    const opts = typeof onPageOrOpts === 'function'
+      ? { onPage: onPageOrOpts }
+      : (onPageOrOpts || {});
+    const onPage = opts.onPage;
+    const yearOnly = !!opts.yearOnly;
+    const pageSize = Math.max(500, Math.min(2000, Number(opts.pageSize) || 1000));
+    const token = opts.token;
     const table = (global.NCES_CONFIG && global.NCES_CONFIG.tables
       && global.NCES_CONFIG.tables.schoolDirectory) || 'nces_school_directory';
     const lea = leaid ? padLeaid(leaid) : '';
     const rawLea = leaid ? String(leaid).trim() : '';
     const years = [];
     if (year != null && Number.isFinite(Number(year))) years.push(Number(year));
-    const defY = Number((global.NCES_CONFIG && global.NCES_CONFIG.defaultSchoolYear) || 2024);
-    [defY, 2023, 2022, 2021, 2020, 2015].forEach((y) => {
-      if (!years.includes(y)) years.push(y);
-    });
+    if (!yearOnly) {
+      const defY = Number((global.NCES_CONFIG && global.NCES_CONFIG.defaultSchoolYear) || 2024);
+      [defY, 2023, 2022, 2021, 2020, 2015].forEach((y) => {
+        if (!years.includes(y)) years.push(y);
+      });
+    }
+    if (!years.length) {
+      years.push(Number((global.NCES_CONFIG && global.NCES_CONFIG.defaultSchoolYear) || 2024));
+    }
 
     async function pageQuery(build) {
       const rows = [];
-      const pageSize = 1000;
       for (let from = 0; from < 200000; from += pageSize) {
+        if (token != null && token !== schoolLoadToken) return rows;
+        if (token != null) await waitWhileSchoolLoadPaused(token);
+        if (token != null && token !== schoolLoadToken) return rows;
         const q = build(from, from + pageSize - 1);
         const { data, error } = await q;
         if (error) throw new Error(error.message || 'School directory query failed');
-        const chunk = data || [];
-        rows.push(...chunk.map(mapSchoolRow));
+        const chunk = (data || []).map(mapSchoolRow);
+        rows.push(...chunk);
+        if (typeof onPage === 'function' && chunk.length) {
+          try { onPage(chunk, rows.length); } catch (_) { /* ignore */ }
+        }
         if (chunk.length < pageSize) break;
       }
       return rows;
@@ -2822,25 +3198,26 @@
           } catch (_) { /* try next */ }
         }
       }
-      for (let ii = 0; ii < ids.length; ii++) {
-        try {
-          const rows = await pageQuery((from, to) => client
-            .from(table)
-            .select(selectCols)
-            .eq('leaid', ids[ii])
-            .range(from, to));
-          if (rows.length) {
-            // Prefer newest year per ncessch.
-            const best = new Map();
-            rows.forEach((r) => {
-              const prev = best.get(r.ncessch);
-              if (!prev || (Number(r.school_year) || 0) > (Number(prev.school_year) || 0)) {
-                best.set(r.ncessch, r);
-              }
-            });
-            return [...best.values()];
-          }
-        } catch (_) { /* try next */ }
+      if (!yearOnly) {
+        for (let ii = 0; ii < ids.length; ii++) {
+          try {
+            const rows = await pageQuery((from, to) => client
+              .from(table)
+              .select(selectCols)
+              .eq('leaid', ids[ii])
+              .range(from, to));
+            if (rows.length) {
+              const best = new Map();
+              rows.forEach((r) => {
+                const prev = best.get(r.ncessch);
+                if (!prev || (Number(r.school_year) || 0) > (Number(prev.school_year) || 0)) {
+                  best.set(r.ncessch, r);
+                }
+              });
+              return [...best.values()];
+            }
+          } catch (_) { /* try next */ }
+        }
       }
     }
 
@@ -2979,53 +3356,155 @@
     return schoolLoadStatus;
   }
 
-  // In-memory cache of per-state school point rows (keyed year:ST). Survives
+  // In-memory cache of per-state school point rows (keyed dir:year:ST). Survives
   // re-toggles so a second nationwide pass is nearly instant.
   const nationwideSchoolCache = new Map();
   let nationwideSchoolYear = null;
+  /** In-flight nationwide load promise — coalesce duplicate kicks from render/sync. */
+  let nationwideLoadPromise = null;
+  let nationwideFailedStates = [];
 
   function schoolYearFromFilters(f) {
     const filters = f || lastFilters || {};
+    if (changeYears.from === changeYears.to && Number.isFinite(Number(changeYears.to))) {
+      return Number(changeYears.to);
+    }
     if (filters.year != null) return Number(filters.year);
     if (filters.years && filters.years.length) return Math.max(...filters.years.map(Number));
     return Number((global.NCES_CONFIG && global.NCES_CONFIG.defaultSchoolYear) || 2024);
   }
 
+  function cachedNationwideStates(year) {
+    const prefix = `dir:${year}:`;
+    const out = new Set();
+    nationwideSchoolCache.forEach((_, key) => {
+      if (key.startsWith(prefix)) out.add(key.slice(prefix.length));
+    });
+    return out;
+  }
+
+  function rememberNationwideCache(cacheKey, rows) {
+    // Cache empty arrays too so states with no directory rows are not retried forever.
+    if (nationwideSchoolCache.has(cacheKey)) nationwideSchoolCache.delete(cacheKey);
+    nationwideSchoolCache.set(cacheKey, rows || []);
+    // Keep enough room for every state/territory across a couple of years.
+    while (nationwideSchoolCache.size > 120) {
+      const oldest = nationwideSchoolCache.keys().next().value;
+      nationwideSchoolCache.delete(oldest);
+    }
+  }
+
   /**
-   * Progressive nationwide school load: one (or a few) states at a time.
-   * Uses school directory pagination (fast) instead of nces_map_school_points —
-   * that enrollment RPC times out on CA/TX (~10k schools) and used to leave
-   * those states blank with no progress feedback.
+   * Progressive nationwide school load: stream pages onto the map as they arrive.
+   * Large / viewport states first. Uses school directory pagination (fast) instead
+   * of nces_map_school_points — that enrollment RPC times out on CA/TX.
+   *
+   * Duplicate kicks (render + syncMapScopeMode + layer toggle) coalesce onto one
+   * in-flight run so partial maps are not left behind by cancelled workers.
    */
   async function loadNationwideSchools(filters) {
     if (!client || !map) return [];
     if (!visibility.schools) return lastData.schools || [];
-    // Abort if a state/LEA got selected while we were queued.
+    // Abort only for an explicit state/LEA filter — not for Color-by scope.
     const f = Object.assign({}, filters || lastFilters || {});
-    if (f.state || f.leaid || colorScopeState()) {
+    if (f.state || f.leaid) {
       return loadSchoolsForScope(f);
     }
     const year = schoolYearFromFilters(f);
+    const allCodes = Object.keys(STATE_FIPS);
+    const cached = cachedNationwideStates(year);
+    const missing = allCodes.filter((c) => !cached.has(c));
+    const force = !!(filters && filters.forceNationwideReload);
+
+    // Same-year load already running — return it (do not bump token / cancel workers).
+    if (
+      !force
+      && nationwideLoadPromise
+      && nationwideSchoolYear === year
+      && (schoolLoadStatus === 'loading' || schoolLoadStatus === 'paused')
+    ) {
+      return nationwideLoadPromise;
+    }
+
+    // Complete coverage already on the map — skip re-fetch unless forced or gaps remain.
+    if (
+      !force
+      && schoolLoadStatus === 'done'
+      && nationwideSchoolYear === year
+      && (lastData.schools || []).length
+      && !missing.length
+      && !nationwideFailedStates.length
+    ) {
+      return lastData.schools || [];
+    }
+
+    const run = runNationwideSchoolLoad(f, year, {
+      preferCodes: missing.length && missing.length < allCodes.length ? missing : null,
+      retryFailed: nationwideFailedStates.slice(),
+    });
+    nationwideLoadPromise = run.finally(() => {
+      if (nationwideLoadPromise === run) nationwideLoadPromise = null;
+    });
+    return nationwideLoadPromise;
+  }
+
+  async function runNationwideSchoolLoad(f, year, orderOpts) {
     const token = ++schoolLoadToken;
+    schoolLoadPaused = false;
     schoolLoadStatus = 'loading';
     nationwideSchoolYear = year;
 
-    // Large states first so CA/TX appear early; then the rest A–Z.
+    // Prefer states currently on screen, then large states, then A–Z.
+    // On resume, uncached / previously failed states go first.
     const LARGE_FIRST = ['CA', 'TX', 'NY', 'FL', 'IL', 'PA', 'OH', 'GA', 'NC', 'MI'];
     const allCodes = Object.keys(STATE_FIPS);
-    const codes = [
-      ...LARGE_FIRST.filter((c) => STATE_FIPS[c]),
-      ...allCodes.filter((c) => !LARGE_FIRST.includes(c)).sort(),
-    ];
+    let viewportCodes = [];
+    try {
+      const b = map.getBounds && map.getBounds();
+      if (b) {
+        viewportCodes = allCodes.filter((code) => {
+          const c = STATE_CENTROIDS[code];
+          if (!c) return false;
+          return b.contains(c);
+        });
+      }
+    } catch (_) { /* ignore */ }
+    const seen = new Set();
+    const codes = [];
+    const pushUnique = (list) => {
+      (list || []).forEach((c) => {
+        if (!STATE_FIPS[c] || seen.has(c)) return;
+        seen.add(c);
+        codes.push(c);
+      });
+    };
+    pushUnique(orderOpts && orderOpts.retryFailed);
+    pushUnique(orderOpts && orderOpts.preferCodes);
+    pushUnique(viewportCodes);
+    pushUnique(LARGE_FIRST);
+    pushUnique(allCodes.slice().sort());
 
     const byId = new Map();
     (lastData.schools || []).forEach((r) => {
       if (r && r.ncessch) byId.set(String(r.ncessch), r);
     });
     const failed = [];
+    const doneStates = [];
+    const activeStates = new Set();
+    let lastPaintAt = 0;
+    schoolLoadRun = {
+      token,
+      done: 0,
+      total: codes.length,
+      doneStates,
+      activeStates,
+      failed,
+    };
 
-    const pushProgress = (done, total, currentCode, note) => {
-      if (token !== schoolLoadToken) return;
+    const paintNow = (forcePaint) => {
+      const now = Date.now();
+      if (!forcePaint && now - lastPaintAt < 220) return;
+      lastPaintAt = now;
       const rows = [...byId.values()];
       lastData.schools = rows;
       try {
@@ -3033,68 +3512,103 @@
       } catch (_) { /* ignore */ }
       try { applySchoolLayerVisibility(); } catch (_) { /* ignore */ }
       try { applyFilters(); } catch (_) { /* ignore */ }
+    };
+
+    const pushProgress = (done, total, currentCode, note, streaming) => {
+      if (token !== schoolLoadToken) return;
+      if (schoolLoadRun) schoolLoadRun.done = done;
+      paintNow(!!streaming || done === total || schoolLoadPaused);
+      const rows = lastData.schools || [];
       const meta = {
-        status: 'loading',
+        status: schoolLoadPaused ? 'paused' : 'loading',
         done,
         total,
         state: currentCode || null,
         schools: rows.length,
         failed: failed.slice(),
+        doneStates: doneStates.slice(),
+        activeStates: [...activeStates],
+        streaming: !!streaming,
+        paused: schoolLoadPaused,
       };
       if (typeof opts.onSchoolsLoaded === 'function') {
         try { opts.onSchoolsLoaded(rows, meta); } catch (_) { /* ignore */ }
       }
-      if (opts.onStatus) {
-        try {
-          const st = computeFilteredStatus({});
-          st.notes = (st.notes || []).concat([
-            note
-              || `Loading schools… ${done}/${total} states`
-                + (currentCode ? ` (now ${currentCode})` : '')
-                + ` · ${rows.length.toLocaleString()} schools`
-                + (failed.length ? ` · ${failed.length} slow/failed` : ''),
-          ]);
-          opts.onStatus(st);
-        } catch (_) { /* ignore */ }
-      }
     };
 
-    pushProgress(0, codes.length, null, 'Starting nationwide school load (large states first)…');
+    pushProgress(0, codes.length, null, 'Starting nationwide school load (visible + large states first)…');
 
-    const CONCURRENCY = 2;
+    const CONCURRENCY = 6;
     let cursor = 0;
     let completed = 0;
 
+    function ingestRow(r) {
+      const mapped = mapSchoolRow(r);
+      if (!mapped.ncessch) return;
+      if (Number(mapped.enrollment) <= 0) {
+        const approx = Math.round((Number(mapped.teachers_fte) || 0) * 15);
+        mapped.enrollment = approx > 0 ? approx : 50;
+      }
+      byId.set(String(mapped.ncessch), mapped);
+    }
+
+    function normalizeRows(rows) {
+      return (rows || []).map((r) => {
+        if (Number(r.enrollment) > 0) return r;
+        const approx = Math.round((Number(r.teachers_fte) || 0) * 15);
+        return Object.assign({}, r, { enrollment: approx > 0 ? approx : 50 });
+      });
+    }
+
     async function loadOne(code) {
       if (token !== schoolLoadToken) return;
+      await waitWhileSchoolLoadPaused(token);
+      if (token !== schoolLoadToken) return;
+      activeStates.add(code);
+      pushProgress(completed, codes.length, code, `Loading ${code}…`, true);
       const cacheKey = `dir:${year}:${code}`;
       let rows = nationwideSchoolCache.get(cacheKey);
       if (!rows) {
         try {
-          // Directory paging is reliable for CA/TX; enrollment RPC often times out.
-          rows = await fetchSchoolDirectoryRows(code, null, year);
-          // Approximate marker size when enrollment isn't joined yet.
-          rows = (rows || []).map((r) => {
-            if (Number(r.enrollment) > 0) return r;
-            const approx = Math.round((Number(r.teachers_fte) || 0) * 15);
-            return Object.assign({}, r, { enrollment: approx > 0 ? approx : 50 });
+          const onPage = (chunk) => {
+            if (token !== schoolLoadToken) return;
+            (chunk || []).forEach(ingestRow);
+            pushProgress(
+              completed,
+              codes.length,
+              code,
+              `Streaming ${code}… ${byId.size.toLocaleString()} schools so far`,
+              true
+            );
+          };
+          rows = await fetchSchoolDirectoryRows(code, null, year, {
+            yearOnly: true,
+            pageSize: 1000,
+            token,
+            onPage,
           });
+          // Selected year empty for this state — fall back to latest available year.
+          if (!(rows || []).length) {
+            rows = await fetchSchoolDirectoryRows(code, null, year, {
+              yearOnly: false,
+              pageSize: 1000,
+              token,
+              onPage,
+            });
+          }
+          rows = normalizeRows(rows);
         } catch (err) {
           console.warn('Nationwide school load failed for', code, err);
           failed.push(code);
           rows = [];
         }
-        if (rows && rows.length) nationwideSchoolCache.set(cacheKey, rows);
-        if (nationwideSchoolCache.size > 80) {
-          const oldest = nationwideSchoolCache.keys().next().value;
-          nationwideSchoolCache.delete(oldest);
-        }
+        // Do not cache hard failures — those stay in nationwideFailedStates for retry.
+        if (!failed.includes(code)) rememberNationwideCache(cacheKey, rows || []);
       }
       if (token !== schoolLoadToken) return;
-      (rows || []).forEach((r) => {
-        const mapped = mapSchoolRow(r);
-        if (mapped.ncessch) byId.set(String(mapped.ncessch), mapped);
-      });
+      (rows || []).forEach(ingestRow);
+      activeStates.delete(code);
+      if (!failed.includes(code)) doneStates.push(code);
       completed += 1;
       pushProgress(completed, codes.length, code);
     }
@@ -3103,18 +3617,40 @@
       while (cursor < codes.length) {
         if (token !== schoolLoadToken) return;
         if (!visibility.schools) return;
-        if ((lastFilters && lastFilters.state) || colorScopeState()) return;
+        // Only stop for an explicit dashboard state/LEA filter (not color-scope).
+        if (lastFilters && (lastFilters.state || lastFilters.leaid)) return;
+        await waitWhileSchoolLoadPaused(token);
+        if (token !== schoolLoadToken) return;
         const code = codes[cursor++];
         await loadOne(code);
       }
     }
 
     await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
-    if (token !== schoolLoadToken) return lastData.schools || [];
-    if (!visibility.schools) return lastData.schools || [];
-    if ((lastFilters && lastFilters.state) || colorScopeState()) return lastData.schools || [];
+    if (token !== schoolLoadToken) {
+      // Stopped or superseded — keep whatever markers we already painted.
+      return lastData.schools || [];
+    }
+    if (!visibility.schools) {
+      // Layer turned off mid-run (token usually bumps too); don't leave status=loading.
+      if (schoolLoadStatus === 'loading' || schoolLoadStatus === 'paused') {
+        schoolLoadStatus = 'idle';
+        schoolLoadRun = null;
+      }
+      return lastData.schools || [];
+    }
+    if (lastFilters && (lastFilters.state || lastFilters.leaid)) {
+      // Scope narrowed mid-run — mark incomplete so a later nationwide kick can resume.
+      schoolLoadStatus = 'idle';
+      schoolLoadRun = null;
+      nationwideFailedStates = allCodes.filter((c) => !doneStates.includes(c) && !failed.includes(c));
+      return lastData.schools || [];
+    }
 
     const finalRows = [...byId.values()];
+    schoolLoadRun = null;
+    schoolLoadStatus = 'done';
+    nationwideFailedStates = failed.slice();
     publishSchools(finalRows, 'done', { fit: false });
     if (typeof opts.onSchoolsLoaded === 'function') {
       try {
@@ -3124,19 +3660,10 @@
           total: codes.length,
           schools: finalRows.length,
           failed: failed.slice(),
+          doneStates: doneStates.slice(),
+          activeStates: [],
+          paused: false,
         });
-      } catch (_) { /* ignore */ }
-    }
-    if (opts.onStatus) {
-      try {
-        const st = computeFilteredStatus({});
-        const failNote = failed.length
-          ? ` (${failed.length} state(s) failed: ${failed.slice(0, 6).join(', ')})`
-          : '';
-        st.notes = (st.notes || []).concat([
-          `Nationwide: ${finalRows.length.toLocaleString()} schools loaded${failNote}`,
-        ]);
-        opts.onStatus(st);
       } catch (_) { /* ignore */ }
     }
     return finalRows;
@@ -3331,6 +3858,9 @@
         lastChangeNote = `Pick different From/To years to show ${changeField} change.`;
         applyMetricPaint();
         applyVisibility();
+      } else if (colorMetric) {
+        nationwideMetricKey = null;
+        ensureNationwideMetrics();
       }
       applySchoolChangePaint();
     } else {
@@ -4393,17 +4923,6 @@
     };
   }
 
-  function schoolLevelColorExpr() {
-    return [
-      'match', ['coalesce', ['get', 'school_level'], 4],
-      1, LEVEL_COLORS[1],
-      2, LEVEL_COLORS[2],
-      3, LEVEL_COLORS[3],
-      4, LEVEL_COLORS[4],
-      LEVEL_COLORS[4],
-    ];
-  }
-
   function schoolChangeColorExpr() {
     const meta = changeFieldMeta();
     return changePctFillExpr(meta.pct || 'enrollment_pct', !!meta.worseWhenUp);
@@ -4468,8 +4987,9 @@
   }
 
   /**
-   * Shape always = school level. Color = type | enrollment | change.
+   * Shape always = circle. Color = type | enrollment | change.
    * Size always = enrollment (via icon-size).
+   * Outer ring (icon-halo) = school type — only when fill is enrollment/change.
    */
   function applySchoolDotPaint() {
     applySchoolSymbolPaint();
@@ -4480,6 +5000,7 @@
     const changeOn = showSchoolChangeRings();
     const fillChange = changeOn && schoolMarkerMode === 'change';
     const fillEnroll = schoolMarkerMode === 'enrollment';
+    const metricFill = fillChange || fillEnroll;
     const levelColor = schoolLevelColorExpr();
     const changeColor = schoolChangeColorExpr();
     const enrollColor = schoolEnrollmentColorExpr();
@@ -4488,16 +5009,31 @@
       map.setLayoutProperty('schools-circles', 'icon-size', schoolIconSizeExpr());
       map.setPaintProperty('schools-circles', 'icon-color', fill);
       map.setPaintProperty('schools-circles', 'icon-opacity', schoolOpacityExpr());
-      // White halo reads as an outline; thicken slightly when a school is selected.
       const id = selectedSchoolId();
-      map.setPaintProperty(
-        'schools-circles',
-        'icon-halo-width',
-        id
-          ? ['case', ['==', ['to-string', ['get', 'ncessch']], id], 1.4, 0.85]
-          : 0.85
-      );
-      map.setPaintProperty('schools-circles', 'icon-halo-color', '#ffffff');
+      if (metricFill) {
+        // Colored ring = school type; thicken selected school.
+        map.setPaintProperty('schools-circles', 'icon-halo-color', levelColor);
+        map.setPaintProperty(
+          'schools-circles',
+          'icon-halo-width',
+          id
+            ? ['case', ['==', ['to-string', ['get', 'ncessch']], id], 2.1, 1.45]
+            : 1.45
+        );
+        map.setPaintProperty('schools-circles', 'icon-halo-blur', 0.05);
+      } else {
+        // School-type fill: no type ring (fill already is type). Keep a hairline
+        // white outline only for the selected school so it still pops.
+        map.setPaintProperty('schools-circles', 'icon-halo-color', '#ffffff');
+        map.setPaintProperty(
+          'schools-circles',
+          'icon-halo-width',
+          id
+            ? ['case', ['==', ['to-string', ['get', 'ncessch']], id], 1.1, 0]
+            : 0
+        );
+        map.setPaintProperty('schools-circles', 'icon-halo-blur', 0.1);
+      }
     } catch (err) {
       console.warn('schools-circles paint failed', err);
     }
@@ -5055,13 +5591,19 @@
     reportProgress(100, 'Map ready');
   }
 
-  // States first (fast), then kick the nationwide district mesh right away so
-  // landing-page outlines appear without waiting for the first interactive render.
+  // States first (fast). District mesh is heavy — only kick immediately when
+  // Boundaries = Districts; otherwise wait a few seconds so state colors paint first.
   async function loadNationwideBoundaries() {
     if (nationwideStarted) return;
     nationwideStarted = true;
     await loadNationwideStates();
-    kickNationwideDistricts();
+    if (visibility.districts) {
+      kickNationwideDistricts();
+    } else {
+      setTimeout(() => {
+        if (!nationwideDistrictsStarted) kickNationwideDistricts();
+      }, 4500);
+    }
   }
 
   function kickNationwideDistricts() {
@@ -5078,6 +5620,9 @@
   let nationwideMetricLoading = false;
 
   function resolveMetricYear() {
+    if (changeYears.from === changeYears.to && Number.isFinite(Number(changeYears.to))) {
+      return Number(changeYears.to);
+    }
     if (lastFilters && lastFilters.year != null) return Number(lastFilters.year);
     if (lastFilters && lastFilters.years && lastFilters.years.length) {
       return Math.max(...lastFilters.years.map(Number));
@@ -5905,6 +6450,9 @@
     debugSchools,
     loadSchoolsForScope,
     loadNationwideSchools,
+    pauseNationwideSchools,
+    resumeNationwideSchools,
+    stopNationwideSchools,
     setStateFilterMode,
     setSchoolLevels,
     setSchoolMarkerMode,

@@ -46,7 +46,7 @@ create policy "Admin can update users"
     (auth.jwt() ->> 'email') = 'k12strategies@perkinseastman.com'
   );
 
--- 3. When someone signs up via Supabase Auth, link or create their users row
+-- 3) When someone signs up via Supabase Auth, link or create their users row
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -54,9 +54,20 @@ security definer
 set search_path = public
 as $$
 begin
-  -- Link pre-existing row that matches email (your manually added users)
+  -- Re-link an orphaned profile row (same email, no auth user).
+  -- Always reset to pending so a re-signup shows up for admin approval again.
   update public.users
-  set auth_user_id = new.id
+  set
+    auth_user_id = new.id,
+    approval_status = case
+      when new.email = 'k12strategies@perkinseastman.com' then 'approved'
+      else 'pending'
+    end,
+    approved_at = null,
+    approved_by = null,
+    "Name" = coalesce(new.raw_user_meta_data ->> 'name', "Name"),
+    "Title" = coalesce(new.raw_user_meta_data ->> 'title', "Title"),
+    "Role" = coalesce(new.raw_user_meta_data ->> 'role', "Role")
   where "E_Mail" = new.email
     and auth_user_id is null;
 
