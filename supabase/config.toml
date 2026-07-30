@@ -6,3 +6,6 @@ verify_jwt = false
 
 [functions.sync-nces]
 verify_jwt = false
+
+[functions.auth-email]
+verify_jwt = false
