@@ -2632,6 +2632,24 @@ body.is-resizing-detail .map-detail-panel {
   font-size: 0.95rem;
 }
 
+.map-school-hover-popup .mapboxgl-popup-content {
+  padding: 6px 10px;
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.18);
+  font-size: 0.8rem;
+  line-height: 1.25;
+}
+
+.map-school-hover-popup .mapboxgl-popup-content strong {
+  display: block;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.map-school-hover-popup .mapboxgl-popup-tip {
+  border-top-color: #fff;
+}
+
 .map-popup div {
   font-size: 0.82rem;
   color: var(--text);

@@ -423,6 +423,14 @@
     schools: [null, null],
   };
 
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;');
+  }
+
   function gradeLabel(v) {
     if (v == null) return '—';
     if (v === -1) return 'PK';
@@ -1211,7 +1219,7 @@
         'icon-halo-width': 0,
       },
     });
-    // School names — from ~3000 ft view distance; hide if they collide.
+    // School names — neighborhood zoom and closer; hide if they collide.
     addIfMissing({
       id: 'schools-labels',
       type: 'symbol',
@@ -1238,6 +1246,9 @@
         'text-opacity': 0.95,
       },
     });
+    if (map.getLayer('schools-labels')) {
+      try { map.setLayerZoomRange('schools-labels', SCHOOL_LABEL_MIN_ZOOM, 24); } catch (_) { /* ignore */ }
+    }
   }
 
   function popup(lngLat, html, maxWidth) {
@@ -2095,6 +2106,8 @@
     });
   }
 
+  let schoolHoverPopup = null;
+
   function wireInteractions() {
     const hoverLayers = [
       'state-fill-hit', 'districts-hit', 'districts-all-hit',
@@ -2103,6 +2116,35 @@
     hoverLayers.forEach((layer) => {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
+    });
+
+    // Hover name chip for schools at any zoom (map labels only appear when zoomed in).
+    const schoolHoverLayers = ['schools-circles', 'schools-rings', 'schools-dots'];
+    schoolHoverLayers.forEach((layerId) => {
+      map.on('mousemove', layerId, (e) => {
+        if (regionEditActive || !e.features || !e.features.length) return;
+        const p = e.features[0].properties || {};
+        const name = p.school_name || p.ncessch || 'School';
+        if (!schoolHoverPopup) {
+          schoolHoverPopup = new global.mapboxgl.Popup({
+            closeButton: false,
+            closeOnClick: false,
+            offset: 14,
+            className: 'map-school-hover-popup',
+            maxWidth: '240px',
+          });
+        }
+        schoolHoverPopup
+          .setLngLat(e.lngLat)
+          .setHTML(`<strong>${escapeHtml(String(name))}</strong>`)
+          .addTo(map);
+      });
+      map.on('mouseleave', layerId, () => {
+        if (schoolHoverPopup) {
+          schoolHoverPopup.remove();
+          schoolHoverPopup = null;
+        }
+      });
     });
 
     // Single zoom-aware click handler. Precedence: HS assign → school → district → state.
@@ -2687,8 +2729,8 @@
   }
 
   const DETAILED_DISTRICT_ZOOM = 7.5;
-  /** ~3000 ft view distance (mid-latitudes); school names appear from here. */
-  const SCHOOL_LABEL_MIN_ZOOM = 15;
+  /** School name labels on the map (collision-aware). ~neighborhood / local streets. */
+  const SCHOOL_LABEL_MIN_ZOOM = 13;
   let detailedFocusState = null;
   let detailedLoadToken = 0;
   let detailedViewTimer = null;
