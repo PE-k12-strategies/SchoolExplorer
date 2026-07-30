@@ -434,7 +434,7 @@
   // School marker encoding when From≠To: 'type' = fill by level;
   // 'change' / 'enrollment' = metric fill, optional type ring (schoolTypeRing).
   let schoolMarkerMode = 'type'; // 'type' | 'change' | 'enrollment'
-  let schoolTypeRing = true; // rim by school level when fill is change/enrollment
+  let schoolTypeRing = false; // rim by school level when fill is change/enrollment
   // Enrollment min/max filters per layer (null = unbounded).
   const sizeRange = {
     states: [null, null],
@@ -2762,8 +2762,8 @@
   }
 
   const DETAILED_DISTRICT_ZOOM = 7.5;
-  /** School name labels on the map (collision-aware). ~neighborhood / local streets. */
-  const SCHOOL_LABEL_MIN_ZOOM = 13;
+  /** School name labels on the map (collision-aware). ~1 mile scale (earlier than street level). */
+  const SCHOOL_LABEL_MIN_ZOOM = 12;
   let detailedFocusState = null;
   let detailedLoadToken = 0;
   let detailedViewTimer = null;
@@ -6735,16 +6735,36 @@
   }
 
   // Switch basemap. setStyle wipes custom layers, so re-add them and re-render
-  // once the new style has loaded.
+  // once the new style has loaded — keep the exact camera (no re-fit).
   function setBasemap(key) {
     if (!map) return;
-    currentBasemap = BASEMAPS[key] ? key : 'light';
+    const next = BASEMAPS[key] ? key : 'light';
+    if (next === currentBasemap && map.isStyleLoaded && map.isStyleLoaded()) return;
+    currentBasemap = next;
     const url = BASEMAPS[currentBasemap] || BASEMAPS.light;
-    map.once('style.load', () => {
+    const camera = {
+      center: map.getCenter(),
+      zoom: map.getZoom(),
+      bearing: map.getBearing(),
+      pitch: map.getPitch(),
+    };
+    map.once('style.load', async () => {
+      const restoreCamera = () => {
+        try {
+          map.jumpTo({
+            center: camera.center,
+            zoom: camera.zoom,
+            bearing: camera.bearing,
+            pitch: camera.pitch,
+          });
+        } catch (_) { /* ignore */ }
+      };
+      restoreCamera();
       addLayers();
       applyMetricPaint();
       applyVisibility();
       applySelectionFilter();
+      applySchoolChangePaint();
       // Restore nationwide boundary data (setStyle recreates empty sources).
       if (allStatesFc.features.length && map.getSource('state-outline')) {
         setStateOutlineData(allStatesFc);
@@ -6755,9 +6775,16 @@
       if (lastDistrictFc.features.length) {
         setDistrictsSourceData(lastDistrictFc);
       }
+      if (lastData.schools && lastData.schools.length && map.getSource('schools')) {
+        try { map.getSource('schools').setData(schoolsToFc(lastData.schools)); } catch (_) { /* ignore */ }
+      }
       refreshDistrictRegionsSource();
       refreshHsAreasSource();
-      if (lastFilters && Object.keys(lastFilters).length) render(lastFilters);
+      // Re-apply filters/paints without flying/fitting away from the saved view.
+      if (lastFilters && Object.keys(lastFilters).length) {
+        try { await render(lastFilters, { skipFit: true }); } catch (_) { /* ignore */ }
+      }
+      restoreCamera();
     });
     map.setStyle(url);
   }
