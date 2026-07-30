@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>User Access Admin</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon.png" type="image/png" sizes="32x32">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -65,8 +67,8 @@
         <div id="pending-list" class="user-list"></div>
 
         <h2 class="section-title">Approved users</h2>
-        <p class="section-hint">Update name, title, email, role, or access level below.</p>
-        <div id="approved-list" class="user-list"></div>
+        <p class="section-hint">Compact list — click Edit to change name, title, email, role, or access level.</p>
+        <div id="approved-list" class="user-table-wrap"></div>
 
         <h2 class="section-title">Rejected</h2>
         <div id="rejected-list" class="user-list"></div>
@@ -422,6 +424,134 @@
       users.forEach((u) => container.appendChild(renderUserCard(u)));
     }
 
+    function bindEditForm(form, user, onDone) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const saveBtn = form.querySelector('button[type="submit"]');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+        try {
+          const fd = new FormData(form);
+          const ok = await saveUser(user.id, {
+            name: fd.get('name'),
+            title: fd.get('title'),
+            email: fd.get('email'),
+            role: fd.get('role'),
+            status: fd.get('status'),
+          }, user);
+          if (ok && onDone) onDone();
+        } catch (err) {
+          showMessage(err.message || 'Save failed.', 'error');
+        } finally {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save changes';
+        }
+      });
+    }
+
+    function renderApprovedTable(container, users, emptyText) {
+      container.innerHTML = '';
+      if (users.length === 0) {
+        container.innerHTML = `<p class="empty-state">${emptyText}</p>`;
+        return;
+      }
+
+      const wrap = document.createElement('div');
+      wrap.className = 'user-table-scroll';
+      wrap.innerHTML = `
+        <table class="user-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Title</th>
+              <th>Role</th>
+              <th>Updated</th>
+              <th>Login</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      `;
+      const tbody = wrap.querySelector('tbody');
+
+      users.forEach((user) => {
+        const tr = document.createElement('tr');
+        tr.className = 'user-table-row';
+        tr.dataset.userId = user.id;
+        tr.innerHTML = `
+          <td class="col-name">${escapeHtml(user.Name || '—')}</td>
+          <td class="col-email" title="${escapeHtml(user.E_Mail || '')}">${escapeHtml(user.E_Mail || '—')}</td>
+          <td>${escapeHtml(formatTitle(user.Title))}</td>
+          <td>${escapeHtml(user.Role || '—')}</td>
+          <td class="col-date">${escapeHtml(formatDate(user.approved_at || user.created_at))}</td>
+          <td class="col-login">${user.auth_user_id ? 'Linked' : '<span class="warn-text">Unlinked</span>'}</td>
+          <td class="col-actions">
+            <button type="button" class="btn btn-secondary btn-sm edit-btn">Edit</button>
+          </td>
+        `;
+
+        const editTr = document.createElement('tr');
+        editTr.className = 'user-table-edit-row hidden';
+        editTr.innerHTML = `
+          <td colspan="7">
+            <form class="user-edit-form user-table-edit-form">
+              <div class="edit-grid">
+                <label>
+                  Name
+                  <input type="text" name="name" value="${escapeHtml(user.Name || '')}" required>
+                </label>
+                <label>
+                  Title
+                  <select name="title" required>${titleOptions(user.Title)}</select>
+                </label>
+                <label>
+                  Email
+                  <input type="email" name="email" value="${escapeHtml(user.E_Mail || '')}" required>
+                </label>
+                <label>
+                  Role
+                  <select name="role" required>${roleOptions(user.Role)}</select>
+                </label>
+                <label>
+                  Access level
+                  <select name="status" required>${statusOptions(user.approval_status)}</select>
+                </label>
+              </div>
+              <div class="user-actions">
+                <button type="submit" class="btn btn-success btn-sm">Save changes</button>
+                <button type="button" class="btn btn-secondary btn-sm cancel-btn">Cancel</button>
+              </div>
+            </form>
+          </td>
+        `;
+
+        const editBtn = tr.querySelector('.edit-btn');
+        const form = editTr.querySelector('form');
+        const cancelBtn = editTr.querySelector('.cancel-btn');
+
+        editBtn.addEventListener('click', () => {
+          tbody.querySelectorAll('.user-table-edit-row').forEach((row) => row.classList.add('hidden'));
+          tbody.querySelectorAll('.user-table-row').forEach((row) => row.classList.remove('is-editing'));
+          editTr.classList.remove('hidden');
+          tr.classList.add('is-editing');
+        });
+
+        cancelBtn.addEventListener('click', () => {
+          editTr.classList.add('hidden');
+          tr.classList.remove('is-editing');
+        });
+
+        bindEditForm(form, user);
+
+        tbody.appendChild(tr);
+        tbody.appendChild(editTr);
+      });
+
+      container.appendChild(wrap);
+    }
+
     async function loadUsers() {
       const { data, error } = await client
         .from('users')
@@ -437,8 +567,11 @@
       const approved = data.filter((u) => u.approval_status === 'approved');
       const rejected = data.filter((u) => u.approval_status === 'rejected');
 
+      // Sort approved by name for easier scanning in the table.
+      approved.sort((a, b) => String(a.Name || '').localeCompare(String(b.Name || ''), undefined, { sensitivity: 'base' }));
+
       renderList(pendingList, pending, 'No pending requests.');
-      renderList(approvedList, approved, 'No approved users yet.');
+      renderApprovedTable(approvedList, approved, 'No approved users yet.');
       renderList(rejectedList, rejected, 'No rejected users.');
     }
 

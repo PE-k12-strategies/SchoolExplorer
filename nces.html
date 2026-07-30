@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NCES District Explorer</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon.png" type="image/png" sizes="32x32">
   <link rel="stylesheet" href="css/styles.css">
   <link rel="stylesheet" href="css/dashboard.css">
   <link rel="stylesheet" href="css/nces.css">
@@ -7766,13 +7768,15 @@
           client.from('users').select('Name, approval_status').eq('auth_user_id', session.user.id).maybeSingle(),
           'Approval check'
         );
-        if (error || profile?.approval_status !== 'approved') {
+        const isAdmin = session.user.email === window.ADMIN_EMAIL;
+        if (!isAdmin && (error || profile?.approval_status !== 'approved')) {
           gateMessage.textContent = 'Your account must be approved to view NCES data.';
           return;
         }
         gateView.classList.add('hidden');
         dashboardView.classList.remove('hidden');
-        document.getElementById('user-label').textContent = profile.Name || session.user.email;
+        document.getElementById('user-label').textContent =
+          profile?.Name || (isAdmin ? 'K12 Strategies' : session.user.email);
         setupAdminApprovalsLink(session.user);
         await initFilters();
         // Map is the default landing — skip heavy School/District overview until needed.

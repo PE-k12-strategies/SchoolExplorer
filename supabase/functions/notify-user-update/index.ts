@@ -5,7 +5,11 @@ const ADMIN_EMAIL = "k12strategies@perkinseastman.com";
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 const NOTIFY_SECRET = Deno.env.get("NOTIFY_SECRET");
 const FROM_EMAIL = Deno.env.get("FROM_EMAIL") ?? "PE Dashboards <onboarding@resend.dev>";
-const INDEX_PAGE_URL = Deno.env.get("INDEX_PAGE_URL") ?? "";
+const APP_BASE =
+  (Deno.env.get("APP_BASE_URL") ?? Deno.env.get("INDEX_PAGE_URL") ??
+    "https://pe-k12-strategies.github.io/SchoolExplorer").replace(/\/$/, "");
+const INDEX_PAGE_URL = Deno.env.get("INDEX_PAGE_URL") || `${APP_BASE}/index.html`;
+const DASHBOARD_URL = Deno.env.get("DASHBOARD_URL") || `${APP_BASE}/nces.html`;
 const NOTIFY_EMAIL = Deno.env.get("NOTIFY_EMAIL") ?? "d.wieberdink@perkinseastman.com";
 
 interface ChangeRow {
@@ -65,19 +69,52 @@ async function sendEmail(to: string, subject: string, html: string) {
   return { ok: true as const, id: data.id };
 }
 
+function isApproved(changes: ChangeRow[]): boolean {
+  return changes.some(
+    (c) =>
+      String(c.field || "").toLowerCase().includes("access") &&
+      String(c.new_value || "").toLowerCase() === "approved",
+  );
+}
+
+function linksBlock(): string {
+  return `
+    <p style="margin-top:20px;">
+      <a href="${escapeHtml(INDEX_PAGE_URL)}" style="display:inline-block;margin:0 12px 8px 0;">Sign in</a>
+      <a href="${escapeHtml(DASHBOARD_URL)}" style="display:inline-block;margin:0 12px 8px 0;">Open District Explorer dashboard</a>
+    </p>
+    <p style="color:#555;font-size:13px;">
+      Sign-in page: ${escapeHtml(INDEX_PAGE_URL)}<br>
+      Dashboard: ${escapeHtml(DASHBOARD_URL)}
+    </p>
+  `;
+}
+
 function buildUserEmail(body: UserUpdatePayload) {
   const name = body.name?.trim() || "there";
   const updatedBy = body.updated_by?.trim() || "an administrator";
   const changes = body.changes ?? [];
+  const approved = isApproved(changes);
 
   const rows = changes.map(
     (c) =>
       `<tr><td><strong>${escapeHtml(c.field ?? "Field")}</strong></td><td>${escapeHtml(c.old_value ?? "—")}</td><td>${escapeHtml(c.new_value ?? "—")}</td></tr>`,
   ).join("");
 
-  const signInBlock = INDEX_PAGE_URL
-    ? `<p><a href="${escapeHtml(INDEX_PAGE_URL)}">Sign in to the dashboard</a></p>`
-    : "<p>Sign in to the dashboard to view your updated access.</p>";
+  if (approved) {
+    return {
+      subject: "Your District Explorer access was approved",
+      html: `
+        <h2>Your access was approved</h2>
+        <p>Hi ${escapeHtml(name)},</p>
+        <p>
+          ${escapeHtml(updatedBy)} approved your Perkins Eastman District Explorer account.
+          Sign in with the email and password you created, then open the dashboard:
+        </p>
+        ${linksBlock()}
+      `,
+    };
+  }
 
   return {
     subject: "Your dashboard profile was updated",
@@ -89,7 +126,7 @@ function buildUserEmail(body: UserUpdatePayload) {
         <tr><td><strong>Field</strong></td><td><strong>Previous</strong></td><td><strong>New</strong></td></tr>
         ${rows}
       </table>
-      ${signInBlock}
+      ${linksBlock()}
     `,
   };
 }

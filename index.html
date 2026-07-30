@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PE Dashboard Access</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon.png" type="image/png" sizes="32x32">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -52,6 +54,10 @@
         </form>
 
         <form id="signup-form" class="hidden">
+          <p class="subtitle" style="margin-bottom: 12px;">
+            Create your own password for this account (at least 8 characters).
+            You will use it to sign in after you confirm your email and an administrator approves you.
+          </p>
           <label>
             Name
             <input type="text" name="name" required autocomplete="name">
@@ -69,8 +75,12 @@
             <input type="email" name="email" required autocomplete="email" placeholder="you@perkinseastman.com">
           </label>
           <label>
-            Password
+            Create password
             <input type="password" name="password" required minlength="8" autocomplete="new-password">
+          </label>
+          <label>
+            Confirm password
+            <input type="password" name="password_confirm" required minlength="8" autocomplete="new-password">
           </label>
           <button type="submit">Request Access</button>
         </form>
@@ -86,7 +96,7 @@
           <p id="status-message" class="subtitle" style="margin-top: 12px;"></p>
         </div>
         <a id="open-explorer-btn" href="nces.html" class="btn hidden" style="text-align: center; margin-top: 16px; text-decoration: none;">
-          Open District Explorer
+          Open District Explorer dashboard
         </a>
         <button type="button" class="btn btn-secondary" id="signout-btn" style="margin-top: 16px; width: 100%;">
           Sign Out
@@ -183,12 +193,81 @@
       }
     }
 
-    async function fetchLinkedProfile(userId) {
-      return client
+    function dashboardHref() {
+      const host = window.location.hostname;
+      if (host === 'localhost' || host === '127.0.0.1') return 'nces.html';
+      return window.getAppUrl('nces.html');
+    }
+
+    function withTimeout(promise, ms, label) {
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      });
+      return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
+    }
+
+    async function fetchLinkedProfile(user) {
+      const byAuth = await client
         .from('users')
         .select('Name, Title, E_Mail, Role, approval_status')
-        .eq('auth_user_id', userId)
+        .eq('auth_user_id', user.id)
         .maybeSingle();
+      if (byAuth.data) return byAuth;
+
+      // Admin can read all rows: fall back by email when auth_user_id was never linked.
+      if (user.email && user.email === window.ADMIN_EMAIL) {
+        const byEmail = await client
+          .from('users')
+          .select('Name, Title, E_Mail, Role, approval_status')
+          .eq('E_Mail', user.email)
+          .maybeSingle();
+        if (byEmail.data) return byEmail;
+
+        const byEmailIlike = await client
+          .from('users')
+          .select('Name, Title, E_Mail, Role, approval_status')
+          .ilike('E_Mail', user.email)
+          .limit(1)
+          .maybeSingle();
+        if (byEmailIlike.data) return byEmailIlike;
+      }
+
+      return byAuth.error ? byAuth : { data: null, error: byAuth.error };
+    }
+
+    function applyProfile(user, data) {
+      document.getElementById('user-email').textContent = data.E_Mail || user.email || '—';
+      document.getElementById('user-name').textContent = data.Name || '—';
+      document.getElementById('user-title').textContent = formatTitle(data.Title);
+      document.getElementById('user-role').textContent = data.Role || '—';
+
+      const badge = document.getElementById('approval-badge');
+      badge.textContent = data.approval_status;
+      badge.className = `badge ${data.approval_status}`;
+
+      const openExplorer = document.getElementById('open-explorer-btn');
+      openExplorer.href = dashboardHref();
+      const statusMessage = document.getElementById('status-message');
+
+      if (data.approval_status === 'pending') {
+        openExplorer.classList.add('hidden');
+        statusMessage.textContent =
+          'Your request is pending approval. When an administrator approves you, you will get an email with links to sign in and open the District Explorer dashboard.';
+        return;
+      }
+
+      if (data.approval_status === 'approved') {
+        openExplorer.classList.remove('hidden');
+        statusMessage.textContent =
+          'Your account is approved. Opening the District Explorer dashboard… (or use the button below).';
+        window.location.replace(dashboardHref());
+        return;
+      }
+
+      openExplorer.classList.add('hidden');
+      statusMessage.textContent =
+        'Your access request was not approved. Contact k12strategies@perkinseastman.com for help.';
     }
 
     async function loadProfileInner(user) {
@@ -197,66 +276,79 @@
       document.getElementById('user-title').textContent = '—';
       document.getElementById('user-role').textContent = '—';
       const badge = document.getElementById('approval-badge');
-      badge.textContent = '…';
+      badge.textContent = 'loading';
       badge.className = 'badge';
       const openExplorer = document.getElementById('open-explorer-btn');
       openExplorer.classList.add('hidden');
+      openExplorer.href = dashboardHref();
 
-      let { data, error } = await fetchLinkedProfile(user.id);
-
-      // Self-heal: Auth account exists but public.users was never linked
-      // (classic "Database error saving new user" / orphaned signup).
-      if (!data) {
-        const { data: linked, error: linkErr } = await client.rpc('link_my_user_profile');
-        if (!linkErr && linked) {
-          data = linked;
-          error = null;
-        }
-      }
-
-      if (error || !data) {
-        badge.textContent = 'unlinked';
-        badge.className = 'badge pending';
-        document.getElementById('status-message').textContent =
-          'Your login worked, but your access profile is not linked yet. Ask k12strategies@perkinseastman.com to approve your account, then sign in again.';
-        showMessage(
-          'Profile not linked yet. An admin needs to repair/approve your account in Supabase (see sql/fix-handle-new-user.sql).',
-          'warning'
-        );
-        return;
-      }
-
-      document.getElementById('user-email').textContent = data.E_Mail || user.email || '—';
-      document.getElementById('user-name').textContent = data.Name || '—';
-      document.getElementById('user-title').textContent = formatTitle(data.Title);
-      document.getElementById('user-role').textContent = data.Role || '—';
-
-      badge.textContent = data.approval_status;
-      badge.className = `badge ${data.approval_status}`;
-
-      const statusMessage = document.getElementById('status-message');
-      if (data.approval_status === 'pending') {
-        statusMessage.textContent =
-          'Your request is pending approval. You cannot open the District Explorer until an administrator approves you. You will get an email when that happens — then sign in again here.';
-      } else if (data.approval_status === 'approved') {
-        statusMessage.textContent =
-          'Your account is approved. Opening District Explorer… (or use the button below if you are not redirected).';
-        openExplorer.classList.remove('hidden');
-      } else {
-        statusMessage.textContent =
-          'Your access request was not approved. Contact k12strategies@perkinseastman.com for help.';
-      }
-
+      const isAdmin = user.email === window.ADMIN_EMAIL;
       const adminLink = document.getElementById('admin-link');
-      if (user.email === window.ADMIN_EMAIL) {
+      if (isAdmin) {
         adminLink.classList.remove('hidden');
       } else {
         adminLink.classList.add('hidden');
       }
 
-      if (data.approval_status === 'approved') {
-        window.location.replace('nces.html');
+      let data = null;
+      let error = null;
+      try {
+        const result = await withTimeout(fetchLinkedProfile(user), 8000, 'Profile lookup');
+        data = result.data;
+        error = result.error;
+
+        if (!data) {
+          const linkedResult = await withTimeout(
+            client.rpc('link_my_user_profile'),
+            8000,
+            'Profile link'
+          );
+          if (!linkedResult.error && linkedResult.data) {
+            data = linkedResult.data;
+            error = null;
+          } else if (linkedResult.error) {
+            error = linkedResult.error;
+            console.warn('link_my_user_profile failed', linkedResult.error);
+          }
+        }
+      } catch (err) {
+        error = err;
+        console.warn('Profile load failed', err);
       }
+
+      if (data) {
+        applyProfile(user, data);
+        return;
+      }
+
+      // Admin must never be stuck on an empty card — allow dashboard even if DB row is missing.
+      if (isAdmin) {
+        applyProfile(user, {
+          Name: 'K12 Strategies',
+          Title: 'untitled',
+          E_Mail: user.email,
+          Role: 'Admin',
+          approval_status: 'approved',
+        });
+        showMessage(
+          error?.message
+            ? `Admin profile row missing/unreadable (${error.message}). Opened with temporary admin access — still run sql/link-admin.sql.`
+            : 'Admin profile row missing/unreadable. Opened with temporary admin access — still run sql/link-admin.sql.',
+          'warning'
+        );
+        return;
+      }
+
+      badge.textContent = 'unlinked';
+      badge.className = 'badge pending';
+      document.getElementById('status-message').textContent =
+        'Your login worked, but your access profile is not linked yet. Ask k12strategies@perkinseastman.com to repair your account, then sign in again.';
+      showMessage(
+        error?.message
+          ? `Profile not loaded: ${error.message}`
+          : 'Profile not linked yet. An admin needs to repair your account in Supabase.',
+        'warning'
+      );
     }
 
     async function showSignedIn(user) {
@@ -323,12 +415,18 @@
       e.preventDefault();
       clearMessage();
       const form = new FormData(signupForm);
+      const password = String(form.get('password') || '');
+      const passwordConfirm = String(form.get('password_confirm') || '');
+      if (password !== passwordConfirm) {
+        showMessage('Passwords do not match. Re-enter the same password in both fields.', 'error');
+        return;
+      }
       // Hosted confirm page (see Confirm signup email template + auth-confirm.html).
       const emailRedirectTo = window.getAuthRedirectUrl('auth-confirm.html');
 
       const { data, error } = await client.auth.signUp({
         email: form.get('email'),
-        password: form.get('password'),
+        password,
         options: {
           emailRedirectTo,
           data: {
