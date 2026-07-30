@@ -294,6 +294,22 @@
     return CHANGE_FIELDS[changeField] || CHANGE_FIELDS.enrollment;
   }
 
+  /** Nested Color-by / Change fetches — keep the host loading bar up until all finish. */
+  let metricLoadDepth = 0;
+  function setMetricLoad(state) {
+    if (typeof opts.onMetricLoad !== 'function') return;
+    const active = !!(state && state.active);
+    if (active) {
+      metricLoadDepth += 1;
+      try { opts.onMetricLoad(state); } catch (_) { /* ignore */ }
+      return;
+    }
+    metricLoadDepth = Math.max(0, metricLoadDepth - 1);
+    if (metricLoadDepth === 0) {
+      try { opts.onMetricLoad({ active: false }); } catch (_) { /* ignore */ }
+    }
+  }
+
   /** Step colors for % change (optionally inverted for ratio). */
   function changePctColors(invert) {
     const colors = CHANGE_PCT_SCALE.bins.map((b) => b.color);
@@ -415,9 +431,10 @@
 
   // Active school levels (1=Elem, 2=Middle, 3=High, 4=Other/Combined).
   const schoolLevels = new Set([1, 2, 3, 4]);
-  // School marker encoding when From≠To: 'type' = fill by level + change ring;
-  // 'change' = fill by change + type ring.
+  // School marker encoding when From≠To: 'type' = fill by level;
+  // 'change' / 'enrollment' = metric fill, optional type ring (schoolTypeRing).
   let schoolMarkerMode = 'type'; // 'type' | 'change' | 'enrollment'
+  let schoolTypeRing = true; // rim by school level when fill is change/enrollment
   // Enrollment min/max filters per layer (null = unbounded).
   const sizeRange = {
     states: [null, null],
@@ -2843,10 +2860,20 @@
     else applyVisibility();
   }
 
+  /** Type rim is available when fill is enrollment, or change with From≠To. */
+  function schoolMetricFillActive() {
+    return schoolMarkerMode === 'enrollment'
+      || (schoolMarkerMode === 'change' && showSchoolChangeRings());
+  }
+
+  function schoolTypeRingVisible() {
+    return !!(visibility.schools && schoolTypeRing && schoolMetricFillActive());
+  }
+
   /**
    * Schools always use shape icons (level = shape). Circles layer stays hidden
    * (kept only as a cheap hit-test fallback). Color mode is applied in paint.
-   * Type rim (schools-rings) only when fill is enrollment/change.
+   * Type rim (schools-rings) when fill is enrollment/change and ring toggle is on.
    */
   function applySchoolLayerVisibility() {
     if (!map) return;
@@ -2854,10 +2881,12 @@
       map.setLayoutProperty('schools-dots', 'visibility', 'none');
     }
     const schoolVis = visibility.schools ? 'visible' : 'none';
-    const metricFill = schoolMarkerMode === 'enrollment'
-      || (schoolMarkerMode === 'change' && showSchoolChangeRings());
     if (map.getLayer('schools-rings')) {
-      map.setLayoutProperty('schools-rings', 'visibility', schoolVis !== 'none' && metricFill ? 'visible' : 'none');
+      map.setLayoutProperty(
+        'schools-rings',
+        'visibility',
+        schoolTypeRingVisible() ? 'visible' : 'none'
+      );
     }
     if (map.getLayer('schools-circles')) {
       map.setLayoutProperty('schools-circles', 'visibility', schoolVis);
@@ -2866,6 +2895,7 @@
       map.setLayoutProperty('schools-labels', 'visibility', schoolVis);
     }
     try {
+      // Rim behind fill: rings first, then circles on top.
       if (map.getLayer('schools-rings')) map.moveLayer('schools-rings');
       if (map.getLayer('schools-circles')) map.moveLayer('schools-circles');
       if (map.getLayer('schools-labels')) map.moveLayer('schools-labels');
@@ -3095,6 +3125,12 @@
     }
     if (stateFteLoading) return;
     stateFteLoading = true;
+    const metricLabel = (COLOR_METRICS[colorMetric] && COLOR_METRICS[colorMetric].label) || 'metrics';
+    setMetricLoad({
+      active: true,
+      title: `Loading ${metricLabel}`,
+      label: `Retrieving state ${metricLabel.toLowerCase()} for ${year}…`,
+    });
     try {
       let rows = null;
       try {
@@ -3138,6 +3174,7 @@
       }
     } finally {
       stateFteLoading = false;
+      setMetricLoad({ active: false });
     }
   }
 
@@ -4184,17 +4221,29 @@
     if (!allDistrictsFc.features.length && !allStatesFc.features.length) {
       lastChangeNote = 'Loading boundaries for change choropleth…';
       pushFilteredStatus();
+      setMetricLoad({
+        active: true,
+        title: 'Loading change data',
+        label: 'Waiting for map boundaries…',
+      });
       setTimeout(() => {
+        setMetricLoad({ active: false });
         if (changeYears.from !== changeYears.to) ensureChangeMetrics();
       }, 1500);
       return;
     }
 
     changeLoading = true;
+    const metaPending = changeFieldMeta();
     if (isChangeMetric(colorMetric)) {
-      lastChangeNote = `Loading ${changeFieldMeta().label} change ${from} → ${to}…`;
+      lastChangeNote = `Loading ${metaPending.label} change ${from} → ${to}…`;
       pushFilteredStatus();
     }
+    setMetricLoad({
+      active: true,
+      title: 'Loading change data',
+      label: `Retrieving ${metaPending.label.toLowerCase()} change ${from} → ${to}…`,
+    });
     try {
       let distRows = [];
       let stateRows = [];
@@ -4261,6 +4310,7 @@
       }
     } finally {
       changeLoading = false;
+      setMetricLoad({ active: false });
     }
   }
 
@@ -5244,7 +5294,7 @@
   /**
    * Shape always = circle. Color = type | enrollment | change.
    * Size always = enrollment (via icon-size).
-   * Outer rim = larger schools-rings circle (school type) when fill is enrollment/change.
+   * Outer rim = larger schools-rings circle (school type) when enabled + metric fill.
    * Avoid icon-halo — it clips to the square SDF texture and looks like a box.
    */
   function applySchoolDotPaint() {
@@ -5256,7 +5306,6 @@
     const changeOn = showSchoolChangeRings();
     const fillChange = changeOn && schoolMarkerMode === 'change';
     const fillEnroll = schoolMarkerMode === 'enrollment';
-    const metricFill = fillChange || fillEnroll;
     const levelColor = schoolLevelColorExpr();
     const changeColor = schoolChangeColorExpr();
     const enrollColor = schoolEnrollmentColorExpr();
@@ -5276,7 +5325,7 @@
         map.setLayoutProperty(
           'schools-rings',
           'visibility',
-          visibility.schools && metricFill ? 'visible' : 'none'
+          schoolTypeRingVisible() ? 'visible' : 'none'
         );
       }
     } catch (err) {
@@ -5297,6 +5346,15 @@
     if (schoolMarkerMode === 'change' || showSchoolChangeRings()) {
       ensureSchoolChangeMetrics();
     }
+  }
+
+  function setSchoolTypeRing(on) {
+    schoolTypeRing = !!on;
+    applySchoolChangePaint();
+  }
+
+  function getSchoolTypeRing() {
+    return !!schoolTypeRing;
   }
 
   async function ensureSchoolChangeMetrics() {
@@ -5328,6 +5386,11 @@
       }
       return;
     }
+    setMetricLoad({
+      active: true,
+      title: 'Loading school change',
+      label: `Retrieving ${changeFieldMeta().label.toLowerCase()} change ${from} → ${to}…`,
+    });
     try {
       let rows;
       try {
@@ -5393,6 +5456,8 @@
       schoolChangeById = {};
       schoolChangeKey = null;
       applySchoolChangePaint();
+    } finally {
+      setMetricLoad({ active: false });
     }
   }
 
@@ -5894,6 +5959,12 @@
     const key = String(year);
     if (nationwideMetricKey === key || nationwideMetricLoading) return;
     nationwideMetricLoading = true;
+    const metricLabel = (COLOR_METRICS[colorMetric] && COLOR_METRICS[colorMetric].label) || 'district metrics';
+    setMetricLoad({
+      active: true,
+      title: `Loading ${metricLabel}`,
+      label: `Retrieving nationwide district ${metricLabel.toLowerCase()} for ${year}…`,
+    });
     try {
       let rows = null;
       try {
@@ -5954,7 +6025,10 @@
         opts.onDataRanges({ districts: computeRangeFc(allDistrictsFc, 'enrollment') });
       }
     } catch (_) { /* setup RPC missing or failed — mesh stays uncolored */ }
-    finally { nationwideMetricLoading = false; }
+    finally {
+      nationwideMetricLoading = false;
+      setMetricLoad({ active: false });
+    }
   }
 
   const BOUNDARY_LS_PREFIX = 'nces_dist_bounds_v6_';
@@ -6712,6 +6786,8 @@
     setStateFilterMode,
     setSchoolLevels,
     setSchoolMarkerMode,
+    setSchoolTypeRing,
+    getSchoolTypeRing,
     setSizeRange,
     setBasemap,
     clearSelection,

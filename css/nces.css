@@ -1668,6 +1668,18 @@
   border-radius: 50%;
 }
 
+.map-swatch.map-swatch-ring {
+  box-sizing: border-box;
+  background: transparent;
+  border: 3px solid #2563eb;
+  border-radius: 50%;
+}
+
+#map-school-type-ring-wrap.is-disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .map-swatch.map-shape-triangle {
   width: 13px;
   height: 13px;
@@ -2435,6 +2447,70 @@ body.is-resizing-detail .map-detail-panel {
 .map-status.is-hidden {
   opacity: 0;
   visibility: hidden;
+}
+
+/* Color-by / Change metric fetch — indeterminate bar while RPCs run. */
+.map-metric-load {
+  position: absolute;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  width: min(380px, calc(100% - 24px));
+  background: rgba(15, 23, 42, 0.94);
+  color: #fff;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.map-wrap.has-detail-open .map-metric-load {
+  left: calc(50% + (var(--map-detail-width, 380px) / 2));
+}
+
+.map-metric-load.hidden {
+  display: none;
+}
+
+.map-metric-load-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.map-metric-load-head strong {
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.map-metric-load-label {
+  margin-bottom: 8px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.map-metric-load-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+
+.map-metric-load-bar {
+  height: 100%;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #38bdf8, #4ade80 70%, #a3e635);
+  background-size: 200% 100%;
+}
+
+.map-metric-load-bar.is-busy {
+  animation: loading-bar-shimmer 1.4s linear infinite;
 }
 
 /* Nationwide school load — stays visible while large states (CA/TX) finish. */

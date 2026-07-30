@@ -365,6 +365,16 @@
                   <select id="map-year-to"></select>
                 </label>
               </div>
+              <!-- Shared: which value Change colors (states + districts). -->
+              <div class="map-change-metric hidden" id="map-change-metric">
+                <div class="map-colorby-label">Change of</div>
+                <div class="colorby-toggle" id="change-field-toggle" role="group" aria-label="Change metric">
+                  <button type="button" data-change-field="enrollment" class="is-active">Enrollment</button>
+                  <button type="button" data-change-field="teachers">Teachers</button>
+                  <button type="button" data-change-field="staff">Staff</button>
+                  <button type="button" data-change-field="ratio">Stud/teacher</button>
+                </div>
+              </div>
             </details>
 
             <details class="map-group" id="map-controls-schools" hidden>
@@ -373,6 +383,11 @@
               <label class="map-check"><input type="checkbox" class="map-level" value="2" checked><span class="map-swatch map-shape-circle" data-level-swatch="2"></span> Middle</label>
               <label class="map-check"><input type="checkbox" class="map-level" value="3" checked><span class="map-swatch map-shape-circle" data-level-swatch="3"></span> High</label>
               <label class="map-check"><input type="checkbox" class="map-level" value="4" checked><span class="map-swatch map-shape-circle" data-level-swatch="4"></span> Other / Combined</label>
+              <label class="map-check" id="map-school-type-ring-wrap" title="Colored rim by school type when fill is Enrollment or Change">
+                <input type="checkbox" id="map-school-type-ring" checked>
+                <span class="map-swatch map-shape-circle map-swatch-ring" aria-hidden="true"></span>
+                School type ring
+              </label>
               <div class="map-colorby" id="school-marker-mode-wrap">
                 <div class="map-colorby-label">School marker color</div>
                 <div class="colorby-toggle" id="school-marker-mode" role="group" aria-label="School marker color mode">
@@ -436,15 +451,6 @@
                   <button type="button" data-metric="ratio">Stud/teacher</button>
                   <button type="button" data-metric="change">Change</button>
                 </div>
-                <div class="map-change-metric hidden" id="map-change-years">
-                  <div class="map-colorby-label">Change metric</div>
-                  <div class="colorby-toggle" id="change-field-toggle" role="group" aria-label="Change metric">
-                    <button type="button" data-change-field="enrollment" class="is-active">Enrollment</button>
-                    <button type="button" data-change-field="teachers">Teachers</button>
-                    <button type="button" data-change-field="ratio">Stud / teacher</button>
-                    <button type="button" data-change-field="staff">Staff</button>
-                  </div>
-                </div>
               </div>
               <div class="range-field">
                 <div class="range-head"><span>District size</span><span class="range-val" id="range-districts-val">All</span></div>
@@ -501,6 +507,15 @@
           <div class="map-school-load-actions" id="map-school-load-actions">
             <button type="button" class="map-school-load-btn" id="map-school-load-pause">Pause</button>
             <button type="button" class="map-school-load-btn is-danger" id="map-school-load-stop">Stop</button>
+          </div>
+        </div>
+        <div class="map-metric-load hidden" id="map-metric-load" aria-live="polite">
+          <div class="map-metric-load-head">
+            <strong id="map-metric-load-title">Loading map data</strong>
+          </div>
+          <div class="map-metric-load-label" id="map-metric-load-label">Please wait…</div>
+          <div class="map-metric-load-track" role="progressbar" aria-valuetext="Loading">
+            <div class="map-metric-load-bar is-busy" id="map-metric-load-bar"></div>
           </div>
         </div>
         <div class="map-bg-load hidden" id="map-bg-load" aria-live="polite">
@@ -2203,6 +2218,18 @@
       });
     }
 
+    /** Color-by / Change data fetch progress (map overlay). */
+    function setMetricLoadUi(state) {
+      const metricLoadEl = document.getElementById('map-metric-load');
+      if (!metricLoadEl) return;
+      const active = !!(state && state.active);
+      metricLoadEl.classList.toggle('hidden', !active);
+      const title = document.getElementById('map-metric-load-title');
+      const label = document.getElementById('map-metric-load-label');
+      if (title) title.textContent = (state && state.title) || 'Loading map data';
+      if (label) label.textContent = (state && state.label) || 'Please wait…';
+    }
+
     function syncMapLayerControlVisibility(vis) {
       const v = vis || window.NcesMap?.getLayerVisibility?.() || {
         schools: document.getElementById('map-layer-schools')?.checked,
@@ -2280,7 +2307,7 @@
       });
       wireRegionEditor();
 
-      const changeYearsEl = document.getElementById('map-change-years');
+      const changeMetricEl = document.getElementById('map-change-metric');
       const yearFrom = document.getElementById('map-year-from');
       const yearTo = document.getElementById('map-year-to');
       const yearDisplay = document.getElementById('map-year-display');
@@ -2339,12 +2366,19 @@
         if (typeof scheduleYearReload === 'function') scheduleYearReload();
       }
 
+      function syncChangeOfVisibility() {
+        // Show Enrollment / Teachers / Staff / Stud-teacher whenever Change is on
+        // (boundary Color-by or school marker fill).
+        if (changeMetricEl) changeMetricEl.classList.toggle('hidden', !isMapYearCompareMode());
+      }
+
       function updateMapYearCompareUi() {
         const comparing = isMapYearCompareMode();
         const wasComparing = !!(yearCompareRow && !yearCompareRow.classList.contains('hidden'));
         if (yearSingleRow) yearSingleRow.classList.toggle('hidden', comparing);
         if (yearCompareRow) yearCompareRow.classList.toggle('hidden', !comparing);
         if (yearGroupTitle) yearGroupTitle.textContent = comparing ? 'Compare years' : 'School year';
+        syncChangeOfVisibility();
         if (comparing) {
           if (yearFrom && yearTo) {
             // Leaving single-year mode: keep the displayed year as the "To" side.
@@ -2433,6 +2467,7 @@
           if (!btn || !window.NcesMap) return;
           changeFieldToggle.querySelectorAll('button').forEach((b) => b.classList.toggle('is-active', b === btn));
           window.NcesMap.setChangeField(btn.getAttribute('data-change-field'));
+          updateChangeLegendVisibility();
         });
       }
 
@@ -2443,9 +2478,10 @@
             b.classList.toggle('is-active', (b.getAttribute('data-metric') || '') === (value || ''));
           });
         });
-        if (changeYearsEl) changeYearsEl.classList.toggle('hidden', value !== 'change');
         // Restore From/To (or single year) BEFORE painting Color-by Change.
+        // updateMapYearCompareUi also shows/hides the "Change of" field toggle.
         if (typeof updateMapYearCompareUi === 'function') updateMapYearCompareUi();
+        else syncChangeOfVisibility();
         if (value === 'change' && yearFrom && yearTo
           && Number(yearFrom.value) === Number(yearTo.value)) {
           const baseline = Number(yearTo.value)
@@ -2662,16 +2698,35 @@
         });
       }
 
+      function syncSchoolTypeRingControl(mode) {
+        const wrap = document.getElementById('map-school-type-ring-wrap');
+        const cb = document.getElementById('map-school-type-ring');
+        if (!wrap || !cb) return;
+        const metricFill = mode === 'enrollment' || mode === 'change';
+        wrap.classList.toggle('is-disabled', !metricFill);
+        cb.disabled = !metricFill;
+        // Rim only applies when fill is Enrollment/Change; preference stays on the checkbox.
+        if (window.NcesMap?.setSchoolTypeRing) {
+          window.NcesMap.setSchoolTypeRing(metricFill && !!cb.checked);
+        }
+      }
+
       function syncSchoolMarkerModeNote(mode) {
         const note = document.getElementById('school-marker-mode-note');
+        const ringOn = !!document.getElementById('map-school-type-ring')?.checked;
         if (!note) return;
         if (mode === 'enrollment') {
-          note.textContent = 'Fill = enrollment · Ring = school type · Size = enrollment';
+          note.textContent = ringOn
+            ? 'Fill = enrollment · Ring = school type · Size = enrollment'
+            : 'Fill = enrollment · Size = enrollment';
         } else if (mode === 'change') {
-          note.textContent = 'Fill = change % · Ring = school type · Size = enrollment';
+          note.textContent = ringOn
+            ? 'Fill = change % · Ring = school type · Size = enrollment'
+            : 'Fill = change % · Size = enrollment';
         } else {
           note.textContent = 'Fill = school type · Size = enrollment';
         }
+        syncSchoolTypeRingControl(mode);
       }
 
       function fillMapColorLegend() {
@@ -2683,9 +2738,17 @@
         const boundariesOn = !!(vis.states || vis.districts);
         const sections = [];
 
+        const changeField = window.NcesMap?.getChangeYears?.()?.field || 'enrollment';
+        const changeFieldLabel = ({
+          enrollment: 'Enrollment',
+          teachers: 'Teachers',
+          staff: 'Staff',
+          ratio: 'Stud/teacher',
+        })[changeField] || 'Enrollment';
+
         // Boundary choropleth only when States or Districts layer is on.
         if (boundariesOn && metric === 'change') {
-          sections.push({ title: 'Change %', items: changeBinItems() });
+          sections.push({ title: `${changeFieldLabel} change %`, items: changeBinItems() });
         } else if (boundariesOn && metric && window.NcesMap?.COLOR_METRICS?.[metric]) {
           const meta = window.NcesMap.COLOR_METRICS[metric];
           const useState = legendUsesStateScale();
@@ -2702,15 +2765,19 @@
             sections.push({ title: 'School type', items: schoolShapeItems() });
           } else if (schoolMode === 'change') {
             if (!(boundariesOn && metric === 'change')) {
-              sections.push({ title: 'Change % (fill)', items: changeBinItems() });
+              sections.push({ title: `${changeFieldLabel} change % (fill)`, items: changeBinItems() });
             }
-            sections.push({ title: 'School type (ring)', items: schoolShapeItems({ ring: true }) });
+            if (document.getElementById('map-school-type-ring')?.checked) {
+              sections.push({ title: 'School type (ring)', items: schoolShapeItems({ ring: true }) });
+            }
           } else if (schoolMode === 'enrollment') {
             sections.push({
               title: 'School enrollment (fill)',
               items: stopsToLegendItems(SCHOOL_ENROLL_LEGEND_STOPS),
             });
-            sections.push({ title: 'School type (ring)', items: schoolShapeItems({ ring: true }) });
+            if (document.getElementById('map-school-type-ring')?.checked) {
+              sections.push({ title: 'School type (ring)', items: schoolShapeItems({ ring: true }) });
+            }
           }
         }
 
@@ -2764,6 +2831,18 @@
         syncSchoolMarkerModeNote(
           schoolFillToggle.querySelector('button.is-active')?.getAttribute('data-school-fill') || 'type'
         );
+      }
+      const schoolTypeRingEl = document.getElementById('map-school-type-ring');
+      if (schoolTypeRingEl && !schoolTypeRingEl.dataset.wired) {
+        schoolTypeRingEl.dataset.wired = '1';
+        schoolTypeRingEl.addEventListener('change', () => {
+          const mode = schoolFillToggle?.querySelector('button.is-active')?.getAttribute('data-school-fill') || 'type';
+          if (window.NcesMap?.setSchoolTypeRing) {
+            window.NcesMap.setSchoolTypeRing(!!schoolTypeRingEl.checked && (mode === 'change' || mode === 'enrollment'));
+          }
+          syncSchoolMarkerModeNote(mode);
+          updateChangeLegendVisibility();
+        });
       }
       const schoolsLayerEl = document.getElementById('map-layer-schools');
       if (schoolsLayerEl && !schoolsLayerEl.dataset.legendWired) {
@@ -3081,6 +3160,7 @@
             },
             onDataRanges: renderMapRanges,
             onStatus: formatMapStatus,
+            onMetricLoad: setMetricLoadUi,
             onCompleteness: renderCompletenessNote,
             onLoadProgress: (pct, label) => {
               // Real checkpoints from the map engine — keep the pulse if still early.
