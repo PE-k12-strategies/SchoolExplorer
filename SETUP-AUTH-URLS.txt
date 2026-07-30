@@ -1,49 +1,66 @@
-AUTH EMAILS — permanent fix (hosted confirm links)
-==================================================
+AUTH EMAIL LINKS — Confirm signup template (preferred)
+======================================================
 
-Problem: Supabase Site URL / Email Templates are locked, so built-in confirm
-emails still open http://localhost:3000.
-
-Fix: signup + password reset go through Edge Function `auth-email`, which
-emails a GitHub Pages link:
-
-  https://pe-k12-strategies.github.io/SchoolExplorer/auth-confirm.html?token_hash=…&type=signup
+You do NOT need the auth-email Edge Function if you can edit Email Templates.
 
 
-ONE-TIME SETUP (Supabase Dashboard)
------------------------------------
+1) Redirect URLs
+----------------
+Authentication → URL Configuration → Redirect URLs — add:
 
-1) Deploy the function
-   Edge Functions → Create / Deploy function named: auth-email
-   Paste code from: supabase/functions/auth-email/index.ts
-   Important: disable JWT verification for this function
-   (or deploy with: supabase functions deploy auth-email --no-verify-jwt)
+  https://pe-k12-strategies.github.io/SchoolExplorer/**
+  https://pe-k12-strategies.github.io/SchoolExplorer/auth-confirm.html
+  https://pe-k12-strategies.github.io/SchoolExplorer/index.html
+  https://pe-k12-strategies.github.io/SchoolExplorer/reset-password.html
 
-2) Function secrets (Project Settings → Edge Functions → Secrets, or function Secrets)
-   SUPABASE_SERVICE_ROLE_KEY  = Project Settings → API → service_role (secret)
-   RESEND_API_KEY             = same key used by notify-admin-signup (if any)
-   FROM_EMAIL                 = PE Dashboards <onboarding@resend.dev>   (or your verified sender)
-   APP_BASE_URL               = https://pe-k12-strategies.github.io/SchoolExplorer
-
-3) Test
-   Sign up a new test address on:
-     https://pe-k12-strategies.github.io/SchoolExplorer/
-   Confirm email should open auth-confirm.html on GitHub Pages (not localhost).
-   Then approve the user on admin.html as usual.
+If you can also edit Site URL, set it to:
+  https://pe-k12-strategies.github.io/SchoolExplorer
 
 
-If RESEND_API_KEY is missing
-----------------------------
-Signup will fail with a clear error until the secret is set. Reuse the Resend
-key already configured for notify-admin-signup when possible.
+2) Confirm signup template (required)
+-------------------------------------
+Authentication → Email Templates → Confirm signup
+
+Replace the body with:
+
+  <h2>Confirm your email</h2>
+  <p>Confirm your School Explorer account:</p>
+  <p>
+    <a href="https://pe-k12-strategies.github.io/SchoolExplorer/auth-confirm.html?token_hash={{ .TokenHash }}&type=signup">
+      Confirm email address
+    </a>
+  </p>
+
+Do NOT use {{ .ConfirmationURL }} or {{ .SiteURL }} (those still go to localhost).
+
+Save.
 
 
-Manual rescue (still works)
----------------------------
-sql/confirm-user-email.sql in the SQL Editor, then approve on admin.html.
+3) Reset password template (recommended)
+----------------------------------------
+Authentication → Email Templates → Reset password
+
+  <h2>Reset your password</h2>
+  <p>
+    <a href="https://pe-k12-strategies.github.io/SchoolExplorer/auth-confirm.html?token_hash={{ .TokenHash }}&type=recovery">
+      Reset password
+    </a>
+  </p>
 
 
-Old workarounds (only if you gain Owner access later)
------------------------------------------------------
-• Site URL → https://pe-k12-strategies.github.io/SchoolExplorer
-• Or custom Confirm signup template using TokenHash (see git history)
+4) Test
+-------
+Sign up a new address on:
+  https://pe-k12-strategies.github.io/SchoolExplorer/
+
+The email link should open auth-confirm.html on GitHub Pages.
+
+
+Manual rescue
+-------------
+sql/confirm-user-email.sql — then approve on admin.html.
+
+
+Optional fallback
+-----------------
+supabase/functions/auth-email/ — only if templates become locked again.

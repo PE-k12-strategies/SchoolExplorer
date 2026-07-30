@@ -490,25 +490,21 @@
     document.getElementById('forgot-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const email = new FormData(e.target).get('email');
-      try {
-        const res = await fetch(`${window.SUPABASE_URL}/functions/v1/auth-email`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${window.SUPABASE_ANON_KEY}`,
-            apikey: window.SUPABASE_ANON_KEY,
-          },
-          body: JSON.stringify({ action: 'recovery', email }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `Reset email failed (${res.status})`);
-        showMessage(
-          `If an account exists for ${email}, a reset link was sent (opens on GitHub Pages, not localhost).`,
-          'success'
-        );
-      } catch (err) {
-        showMessage(err.message || String(err), 'error');
+      const redirectTo = window.getAuthRedirectUrl
+        ? window.getAuthRedirectUrl('reset-password.html')
+        : window.getAppUrl('reset-password.html');
+
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return;
       }
+
+      showMessage(
+        `Reset link sent to ${email}. Open it on ${redirectTo.replace(/\/reset-password\.html$/, '')}`,
+        'success'
+      );
     });
 
     document.getElementById('refresh-btn').addEventListener('click', loadUsers);

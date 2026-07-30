@@ -272,67 +272,66 @@
       clearMessage();
     });
 
-    /** Hosted auth emails via Edge Function (bypasses locked Supabase Site URL). */
-    async function callAuthEmail(payload) {
-      const res = await fetch(`${window.SUPABASE_URL}/functions/v1/auth-email`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${window.SUPABASE_ANON_KEY}`,
-          apikey: window.SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify(payload),
-      });
-      let data = null;
-      try {
-        data = await res.json();
-      } catch (_) {
-        data = null;
-      }
-      if (!res.ok) {
-        throw new Error((data && data.error) || `Auth email failed (${res.status})`);
-      }
-      return data;
-    }
-
     forgotForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       clearMessage();
       const email = new FormData(e.target).get('email');
+      const redirectTo = window.getAuthRedirectUrl('reset-password.html');
 
-      try {
-        await callAuthEmail({ action: 'recovery', email });
-        showMessage(
-          `If an account exists for ${email}, a reset link was sent. Open it on the School Explorer site (not localhost).`,
-          'success'
-        );
-      } catch (err) {
-        showMessage(err.message || String(err), 'error');
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return;
       }
+
+      showMessage(
+        `Reset link sent to ${email}. Open it on ${redirectTo.replace(/\/reset-password\.html$/, '')}`,
+        'success'
+      );
     });
 
     signupForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       clearMessage();
       const form = new FormData(signupForm);
+      // Hosted confirm page (see Confirm signup email template + auth-confirm.html).
+      const emailRedirectTo = window.getAuthRedirectUrl('auth-confirm.html');
 
-      try {
-        await callAuthEmail({
-          action: 'signup',
-          email: form.get('email'),
-          password: form.get('password'),
-          name: form.get('name'),
-          title: form.get('title'),
-          role: form.get('role'),
-        });
+      const { data, error } = await client.auth.signUp({
+        email: form.get('email'),
+        password: form.get('password'),
+        options: {
+          emailRedirectTo,
+          data: {
+            name: form.get('name'),
+            title: form.get('title'),
+            role: form.get('role'),
+          },
+        },
+      });
+
+      if (error) {
+        showMessage(error.message, 'error');
+        return;
+      }
+
+      if (data.user && !data.session) {
         showMessage(
-          'Request submitted. Check your email and open the confirmation link (GitHub Pages), then wait for administrator approval.',
+          'Request submitted. Check your email to confirm your address, then wait for administrator approval.',
           'success'
         );
         signupForm.reset();
         tabs[0].click();
-      } catch (err) {
-        showMessage(err.message || String(err), 'error');
+        return;
+      }
+
+      if (data.user) {
+        showMessage(
+          'Request submitted. Your account is pending approval from k12strategies@perkinseastman.com.',
+          'success'
+        );
+        await showSignedIn(data.user);
       }
     });
 
