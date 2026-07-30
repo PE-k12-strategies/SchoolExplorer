@@ -20,7 +20,6 @@
 
   <main id="dashboard-view" class="page dashboard-page hidden">
     <nav class="nces-nav" aria-label="Dashboard sections">
-      <a id="admin-nav-link" href="admin.html" class="hidden">Admin</a>
       <a href="index.html">Sign out</a>
     </nav>
 
@@ -519,6 +518,12 @@
         </aside>
       </div>
     </section>
+
+    <!-- Admin only: bottom-left link; highlights when pending signups exist. -->
+    <a id="admin-approvals-link" href="admin.html" class="admin-approvals-link hidden" hidden>
+      <span class="admin-approvals-label">Admin approvals</span>
+      <span id="admin-pending-badge" class="admin-pending-badge hidden" aria-hidden="true">0</span>
+    </a>
   </main>
 
   <script src="js/config.js"></script>
@@ -7691,6 +7696,61 @@
       }
     }
 
+    let adminPendingTimer = null;
+
+    /** Bottom-left admin link — only for ADMIN_EMAIL; amber when pending > 0. */
+    function setupAdminApprovalsLink(user) {
+      const link = document.getElementById('admin-approvals-link');
+      const badge = document.getElementById('admin-pending-badge');
+      if (!link) return;
+      const isAdmin = !!(user && window.ADMIN_EMAIL && user.email === window.ADMIN_EMAIL);
+      if (!isAdmin) {
+        link.classList.add('hidden');
+        link.hidden = true;
+        link.classList.remove('has-pending');
+        if (adminPendingTimer) {
+          clearInterval(adminPendingTimer);
+          adminPendingTimer = null;
+        }
+        return;
+      }
+      link.classList.remove('hidden');
+      link.hidden = false;
+
+      async function refreshPendingCount() {
+        try {
+          const { count, error } = await client
+            .from('users')
+            .select('id', { count: 'exact', head: true })
+            .eq('approval_status', 'pending');
+          if (error) throw error;
+          const n = Number(count) || 0;
+          link.classList.toggle('has-pending', n > 0);
+          if (badge) {
+            badge.textContent = String(n);
+            badge.classList.toggle('hidden', n === 0);
+            badge.setAttribute('aria-hidden', n === 0 ? 'true' : 'false');
+          }
+          link.setAttribute(
+            'aria-label',
+            n > 0
+              ? `Admin approvals — ${n} pending registration${n === 1 ? '' : 's'}`
+              : 'Admin approvals'
+          );
+          link.title = n > 0
+            ? `${n} pending registration${n === 1 ? '' : 's'} — open admin`
+            : 'Open admin approvals';
+        } catch (err) {
+          console.warn('Pending signup count failed', err);
+        }
+      }
+
+      refreshPendingCount();
+      if (adminPendingTimer) clearInterval(adminPendingTimer);
+      adminPendingTimer = setInterval(refreshPendingCount, 60000);
+      window.addEventListener('focus', refreshPendingCount);
+    }
+
     async function checkAccess() {
       if (window.location.protocol === 'file:') {
         gateMessage.textContent = 'Open via a local server (npx serve .)';
@@ -7713,10 +7773,7 @@
         gateView.classList.add('hidden');
         dashboardView.classList.remove('hidden');
         document.getElementById('user-label').textContent = profile.Name || session.user.email;
-        const adminNav = document.getElementById('admin-nav-link');
-        if (adminNav) {
-          adminNav.classList.toggle('hidden', session.user.email !== window.ADMIN_EMAIL);
-        }
+        setupAdminApprovalsLink(session.user);
         await initFilters();
         // Map is the default landing — skip heavy School/District overview until needed.
         if (getStoredDataTab() === 'map' || getCurrentDataTab() === 'map') {

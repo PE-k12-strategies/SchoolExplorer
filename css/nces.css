@@ -23,6 +23,68 @@
   border-color: var(--primary);
 }
 
+/* Fixed bottom-left admin entry (approval admin only). */
+.admin-approvals-link {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 45;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #cbd5e1);
+  background: var(--surface, #fff);
+  color: var(--primary, #0f4c81);
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.admin-approvals-link:hover {
+  border-color: var(--primary, #0f4c81);
+}
+
+.admin-approvals-link.has-pending {
+  background: #b45309;
+  border-color: #92400e;
+  color: #fff;
+  box-shadow: 0 4px 18px rgba(180, 83, 9, 0.35);
+}
+
+.admin-approvals-link.has-pending:hover {
+  background: #92400e;
+  border-color: #78350f;
+  color: #fff;
+}
+
+.admin-pending-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4rem;
+  height: 1.4rem;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.admin-approvals-link:not(.has-pending) .admin-pending-badge {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.admin-approvals-link.hidden,
+.admin-approvals-link[hidden] {
+  display: none !important;
+}
+
 .sync-meta {
   font-size: 0.85rem;
   color: var(--muted);

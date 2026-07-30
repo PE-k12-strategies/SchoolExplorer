@@ -85,6 +85,9 @@
           <p>Status: <span id="approval-badge" class="badge"></span></p>
           <p id="status-message" class="subtitle" style="margin-top: 12px;"></p>
         </div>
+        <a id="open-explorer-btn" href="nces.html" class="btn hidden" style="text-align: center; margin-top: 16px; text-decoration: none;">
+          Open District Explorer
+        </a>
         <button type="button" class="btn btn-secondary" id="signout-btn" style="margin-top: 16px; width: 100%;">
           Sign Out
         </button>
@@ -180,37 +183,65 @@
       }
     }
 
-    async function loadProfileInner(user) {
-      const { data, error } = await client
+    async function fetchLinkedProfile(userId) {
+      return client
         .from('users')
         .select('Name, Title, E_Mail, Role, approval_status')
-        .eq('auth_user_id', user.id)
-        .single();
+        .eq('auth_user_id', userId)
+        .maybeSingle();
+    }
 
-      if (error) {
+    async function loadProfileInner(user) {
+      document.getElementById('user-email').textContent = user.email || '—';
+      document.getElementById('user-name').textContent = '—';
+      document.getElementById('user-title').textContent = '—';
+      document.getElementById('user-role').textContent = '—';
+      const badge = document.getElementById('approval-badge');
+      badge.textContent = '…';
+      badge.className = 'badge';
+      const openExplorer = document.getElementById('open-explorer-btn');
+      openExplorer.classList.add('hidden');
+
+      let { data, error } = await fetchLinkedProfile(user.id);
+
+      // Self-heal: Auth account exists but public.users was never linked
+      // (classic "Database error saving new user" / orphaned signup).
+      if (!data) {
+        const { data: linked, error: linkErr } = await client.rpc('link_my_user_profile');
+        if (!linkErr && linked) {
+          data = linked;
+          error = null;
+        }
+      }
+
+      if (error || !data) {
+        badge.textContent = 'unlinked';
+        badge.className = 'badge pending';
+        document.getElementById('status-message').textContent =
+          'Your login worked, but your access profile is not linked yet. Ask k12strategies@perkinseastman.com to approve your account, then sign in again.';
         showMessage(
-          'Signed in, but your profile is not linked yet. Contact k12strategies@perkinseastman.com.',
+          'Profile not linked yet. An admin needs to repair/approve your account in Supabase (see sql/fix-handle-new-user.sql).',
           'warning'
         );
-        document.getElementById('user-email').textContent = user.email;
         return;
       }
 
-      document.getElementById('user-email').textContent = data.E_Mail || user.email;
+      document.getElementById('user-email').textContent = data.E_Mail || user.email || '—';
       document.getElementById('user-name').textContent = data.Name || '—';
       document.getElementById('user-title').textContent = formatTitle(data.Title);
       document.getElementById('user-role').textContent = data.Role || '—';
 
-      const badge = document.getElementById('approval-badge');
       badge.textContent = data.approval_status;
       badge.className = `badge ${data.approval_status}`;
 
       const statusMessage = document.getElementById('status-message');
       if (data.approval_status === 'pending') {
         statusMessage.textContent =
-          'Your request is pending. You will be notified once an administrator approves your account.';
+          'Your request is pending approval. You cannot open the District Explorer until an administrator approves you. You will get an email when that happens — then sign in again here.';
       } else if (data.approval_status === 'approved') {
-        statusMessage.textContent = 'Your account is approved. You can access protected dashboards.';
+        statusMessage.textContent =
+          'Your account is approved. Opening District Explorer… (or use the button below if you are not redirected).';
+        openExplorer.classList.remove('hidden');
       } else {
         statusMessage.textContent =
           'Your access request was not approved. Contact k12strategies@perkinseastman.com for help.';
@@ -223,11 +254,8 @@
         adminLink.classList.add('hidden');
       }
 
-      // Approved users go straight to the NCES explorer (only dashboard).
       if (data.approval_status === 'approved') {
-        statusMessage.textContent = 'Opening District Explorer…';
         window.location.replace('nces.html');
-        return;
       }
     }
 
