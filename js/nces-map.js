@@ -331,11 +331,13 @@
     const stops = (scope === 'states' && m.stateStops) ? m.stateStops : m.stops;
     // to-number: GeoJSON / ArcGIS sometimes leave numeric props as strings, which
     // makes interpolate treat every feature the same.
+    // Repeat the value expression (don't reuse one array node) for Mapbox.
+    const valueExpr = () => ['to-number', ['coalesce', ['get', m.prop], 0]];
     return [
-      'interpolate',
-      ['linear'],
-      ['to-number', ['coalesce', ['get', m.prop], 0]],
-      ...stops,
+      'case',
+      ['<=', valueExpr(), 0],
+      '#e2e8f0',
+      ['interpolate', ['linear'], valueExpr(), ...stops],
     ];
   }
 
@@ -470,6 +472,20 @@
 
   function emptyFc() {
     return { type: 'FeatureCollection', features: [] };
+  }
+
+  /**
+   * Push state polygons to the map. Always pass a new FeatureCollection object —
+   * Mapbox often ignores setData() when given the same object reference after
+   * in-place property edits (Color-by then paints as if every metric were 0).
+   */
+  function setStateOutlineData(fc) {
+    if (!map || !map.getSource('state-outline')) return;
+    const features = (fc && fc.features) || [];
+    map.getSource('state-outline').setData({
+      type: 'FeatureCollection',
+      features,
+    });
   }
 
   /**
@@ -2899,7 +2915,8 @@
       map.setLayoutProperty('districts-all-fill', 'visibility', showMeshFill ? 'visible' : 'none');
     }
     if (map.getLayer('states-choropleth-fill')) {
-      const showStateFill = visibility.states && (!colorMetric || targets.states);
+      // Only show metric fills when Color-by is on for states — Off must clear them.
+      const showStateFill = visibility.states && !!colorMetric && targets.states;
       map.setLayoutProperty('states-choropleth-fill', 'visibility', showStateFill ? 'visible' : 'none');
     }
     applyFilters();
@@ -3002,21 +3019,31 @@
         );
         map.setPaintProperty('districts-fill', 'fill-opacity', 0.38);
       }
+      // Drop leftover choropleth expressions so toggling Off never keeps old colors.
+      if (map.getLayer('states-choropleth-fill')) {
+        map.setPaintProperty('states-choropleth-fill', 'fill-color', '#93c5fd');
+        map.setPaintProperty('states-choropleth-fill', 'fill-opacity', 0.35);
+      }
+      if (map.getLayer('districts-all-fill')) {
+        map.setPaintProperty('districts-all-fill', 'fill-color', '#93c5fd');
+        map.setPaintProperty('districts-all-fill', 'fill-opacity', 0.35);
+      }
       applyFilters();
       return;
     }
     const districtExpr = fillExpr(colorMetric, 'districts');
     const stateExpr = fillExpr(colorMetric, 'states');
     ['districts-fill', 'districts-all-fill'].forEach((id) => {
-      if (map.getLayer(id)) map.setPaintProperty(id, 'fill-color', districtExpr);
+      if (map.getLayer(id)) {
+        map.setPaintProperty(id, 'fill-color', districtExpr);
+        map.setPaintProperty(id, 'fill-opacity', 0.6);
+      }
     });
     if (map.getLayer('states-choropleth-fill')) {
       map.setPaintProperty('states-choropleth-fill', 'fill-color', stateExpr);
+      map.setPaintProperty('states-choropleth-fill', 'fill-opacity', 0.6);
     }
-    if (map.getLayer('districts-fill')) {
-      map.setPaintProperty('districts-fill', 'fill-opacity', 0.6);
-    }
-    // Feature filters (metric > 0) are rebuilt centrally.
+    // Feature filters are rebuilt centrally.
     applyFilters();
   }
 
@@ -3025,14 +3052,15 @@
   function applyStateMetrics() {
     if (!map || !allStatesFc.features.length) return;
     allStatesFc.features.forEach((f) => {
-      const code = f.properties && (f.properties.stusab || f.properties.STUSAB);
-      const s = stateSummaryByCode[code];
+      if (!f.properties) f.properties = {};
+      const code = f.properties.stusab || f.properties.STUSAB;
+      const s = code ? stateSummaryByCode[code] : null;
       f.properties.enrollment = s ? Number(s.enrollment) || 0 : 0;
       f.properties.teachers_fte = s ? Number(s.teachers_fte) || 0 : 0;
       f.properties.staff_fte = s ? Number(s.staff_fte) || 0 : 0;
       f.properties.stu_teacher = s ? (stuTeacher(s.enrollment, s.teachers_fte) || 0) : 0;
     });
-    if (map.getSource('state-outline')) map.getSource('state-outline').setData(allStatesFc);
+    setStateOutlineData(allStatesFc);
   }
 
   // metric: null/'off' | 'enrollment' | 'teachers' | 'staff' | 'ratio' | 'change'
@@ -3054,16 +3082,29 @@
         changeKey = null;
       }
     }
-    applyMetricPaint();
-    applyVisibility();
     if (isChangeMetric(colorMetric)) {
+      // Paint + show immediately; change props load async onto polygons.
+      applyMetricPaint();
+      applyVisibility();
       ensureChangeMetrics();
       ensureSchoolChangeMetrics();
-    } else if (colorMetric) {
-      // Re-apply state snapshot props in case boundaries loaded after the summary RPC.
-      applyStateMetrics();
-      refreshColorScope();
+      return;
     }
+    if (colorMetric) {
+      // Merge summary metrics onto state polygons BEFORE paint/visibility so
+      // Color-by switches don't flash blank (filter/paint reading empty props).
+      applyStateMetrics();
+      applyMetricPaint();
+      applyVisibility();
+      // Belt-and-suspenders: force choropleth on after Off → metric.
+      if (map.getLayer('states-choropleth-fill') && visibility.states) {
+        map.setLayoutProperty('states-choropleth-fill', 'visibility', 'visible');
+      }
+      refreshColorScope();
+      return;
+    }
+    applyMetricPaint();
+    applyVisibility();
   }
 
   /** Fetch district metrics for one state and paint color-by / categorical fills. */
@@ -4111,7 +4152,7 @@
         if (s) Object.assign(f.properties, s);
         else clearChangeProps(f.properties);
       });
-      if (map.getSource('state-outline')) map.getSource('state-outline').setData(allStatesFc);
+      setStateOutlineData(allStatesFc);
 
       changeKey = key;
       const n = (distRows || []).length;
@@ -4453,7 +4494,9 @@
     setF('states-labels', combineFilters(...sRange, modeCode));
     setF('state-fill-hit', combineFilters(...sRange, modeCode));
     setF('state-outline-line', combineFilters(...sRange, modeCode));
-    setF('states-choropleth-fill', combineFilters(metricActive, ...sRange, modeCode));
+    // Do NOT require metric > 0 here — that blanked the choropleth while switching
+    // Color-by (props briefly missing / not yet merged onto state-outline).
+    setF('states-choropleth-fill', combineFilters(...sRange, modeCode));
 
     // Detailed districts for the selected state: enrollment range only.
     // Do NOT hide fills when a metric is missing — paint still runs (0 / no-data
@@ -5629,13 +5672,17 @@
         idbSet('states', feats);
       }
       allStatesFc = { type: 'FeatureCollection', features: feats };
-      if (map.getSource('state-outline')) map.getSource('state-outline').setData(allStatesFc);
+      setStateOutlineData(allStatesFc);
       // Boundaries often finish after nces_map_state_summary — re-merge so
       // enrollment / teachers / staff / ratio color the whole country (change
       // already merges late via ensureChangeMetrics).
       applyStateMetrics();
-      if (colorMetric && !isChangeMetric(colorMetric)) applyMetricPaint();
-      else if (isChangeMetric(colorMetric)) ensureChangeMetrics();
+      if (colorMetric && !isChangeMetric(colorMetric)) {
+        applyMetricPaint();
+        applyVisibility();
+      } else if (isChangeMetric(colorMetric)) {
+        ensureChangeMetrics();
+      }
       reportProgress(32, 'State outlines ready');
     } catch (_) {
       reportProgress(32, 'State outlines unavailable');
@@ -6544,7 +6591,7 @@
       applySelectionFilter();
       // Restore nationwide boundary data (setStyle recreates empty sources).
       if (allStatesFc.features.length && map.getSource('state-outline')) {
-        map.getSource('state-outline').setData(allStatesFc);
+        setStateOutlineData(allStatesFc);
       }
       if (allDistrictsFc.features.length && map.getSource('districts-all')) {
         map.getSource('districts-all').setData(allDistrictsFc);
