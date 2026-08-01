@@ -145,15 +145,20 @@ begin
     sd.charter,
     sd.lowest_grade_offered as lowest_grade,
     sd.highest_grade_offered as highest_grade,
-    coalesce((
-      select sum(se.enrollment)
-      from public.nces_school_enrollment se
-      where se.ncessch = sd.ncessch
-        and se.school_year = yr
-        and se.race = 99
-        and se.sex = 99
-        and se.grade between -1 and 12
-    ), 0)::bigint as enrollment,
+    coalesce(
+      (
+        select sum(se.enrollment)
+        from public.nces_school_enrollment se
+        where se.ncessch = sd.ncessch
+          and se.school_year = yr
+          and se.race = 99
+          and se.sex = 99
+          and se.grade between -1 and 12
+      ),
+      nullif(sd.raw_data ->> 'enrollment', '')::numeric,
+      nullif(sd.raw_data ->> 'enrollment_fall_school', '')::numeric,
+      0
+    )::bigint as enrollment,
     sd.teachers_fte
   from public.nces_school_directory sd
   where sd.school_year = yr

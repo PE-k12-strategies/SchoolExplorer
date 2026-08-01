@@ -143,8 +143,60 @@ begin
     raise exception 'p_ncessch or p_leaid is required';
   end if;
 
+  -- School scope: school enrollment only.
+  if p_ncessch is not null and p_ncessch <> '' then
+    return query
+    with base as (
+      select
+        se.grade,
+        se.school_year,
+        coalesce(sum(se.enrollment), 0)::bigint as enrollment
+      from public.nces_school_enrollment se
+      where se.school_year in (p_year_from, p_year_to)
+        and se.race = 99
+        and se.sex = 99
+        and se.grade between -1 and 12
+        and se.ncessch = p_ncessch
+      group by se.grade, se.school_year
+    ),
+    grades as (
+      select distinct b.grade from base b
+    )
+    select
+      g.grade,
+      coalesce(f.enrollment, 0)::bigint as enrollment_from,
+      coalesce(t.enrollment, 0)::bigint as enrollment_to,
+      (coalesce(t.enrollment, 0) - coalesce(f.enrollment, 0))::bigint as enrollment_delta,
+      case when coalesce(f.enrollment, 0) > 0
+        then round(((coalesce(t.enrollment, 0) - f.enrollment)::numeric / f.enrollment) * 100, 1)
+        else null end as enrollment_pct
+    from grades g
+    left join base f on f.grade = g.grade and f.school_year = p_year_from
+    left join base t on t.grade = g.grade and t.school_year = p_year_to
+    where coalesce(f.enrollment, 0) > 0 or coalesce(t.enrollment, 0) > 0
+    order by g.grade;
+    return;
+  end if;
+
+  -- District scope: prefer district enrollment per year (same as
+  -- nces_map_enrollment_by_grade); fall back to school enrollment for years
+  -- that have no district grade rows (avoids From=0 when only 2015/2020 LEA
+  -- grade tables were synced).
   return query
-  with base as (
+  with dist as (
+    select
+      de.grade,
+      de.school_year,
+      coalesce(sum(de.enrollment), 0)::bigint as enrollment
+    from public.nces_district_enrollment de
+    where de.school_year in (p_year_from, p_year_to)
+      and de.race = 99
+      and de.sex = 99
+      and de.grade between -1 and 12
+      and de.leaid = p_leaid
+    group by de.grade, de.school_year
+  ),
+  sch as (
     select
       se.grade,
       se.school_year,
@@ -154,15 +206,18 @@ begin
       and se.race = 99
       and se.sex = 99
       and se.grade between -1 and 12
-      and (
-        (p_ncessch is not null and p_ncessch <> '' and se.ncessch = p_ncessch)
-        or (
-          (p_ncessch is null or p_ncessch = '')
-          and p_leaid is not null and p_leaid <> ''
-          and se.leaid = p_leaid
-        )
-      )
+      and se.leaid = p_leaid
     group by se.grade, se.school_year
+  ),
+  base as (
+    select d.grade, d.school_year, d.enrollment
+    from dist d
+    union all
+    select s.grade, s.school_year, s.enrollment
+    from sch s
+    where not exists (
+      select 1 from dist d2 where d2.school_year = s.school_year
+    )
   ),
   grades as (
     select distinct b.grade from base b

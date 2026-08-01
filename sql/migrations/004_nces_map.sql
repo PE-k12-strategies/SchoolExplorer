@@ -45,7 +45,9 @@ returns table (
   state_code text,
   districts int,
   schools bigint,
-  enrollment bigint
+  enrollment bigint,
+  teachers_fte numeric,
+  staff_fte numeric
 )
 language plpgsql
 stable
@@ -65,11 +67,14 @@ begin
     dd.state_location as state_code,
     count(distinct dd.leaid)::int as districts,
     coalesce(sum(dd.number_of_schools), 0)::bigint as schools,
-    coalesce(sum(dd.enrollment), 0)::bigint as enrollment
+    coalesce(sum(dd.enrollment), 0)::bigint as enrollment,
+    coalesce(sum(dd.teachers_total_fte), 0)::numeric as teachers_fte,
+    coalesce(sum(dd.staff_total_fte), 0)::numeric as staff_fte
   from public.nces_district_directory dd
   where dd.school_year = yr
     and dd.state_location is not null
-  group by dd.state_location;
+  group by dd.state_location
+  order by dd.state_location;
 end;
 $$;
 

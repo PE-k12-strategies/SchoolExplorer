@@ -80,6 +80,12 @@
   margin-bottom: 24px;
 }
 
+/* Author display:grid beats the UA [hidden] rule — force hide when marked. */
+.chart-grid[hidden],
+.chart-grid.hidden {
+  display: none !important;
+}
+
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);

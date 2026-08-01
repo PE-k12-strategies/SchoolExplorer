@@ -2654,6 +2654,63 @@ body.is-resizing-detail .map-detail-panel {
   cursor: default;
 }
 
+.map-flythrough-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.map-flythrough-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.map-flythrough-btn:hover {
+  background: #f5f5f4;
+}
+
+.map-flythrough-btn.is-danger {
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+.map-flythrough-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.map-flythrough-caption {
+  position: absolute;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 8;
+  max-width: min(520px, calc(100% - 32px));
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(28, 25, 23, 0.78);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+}
+
+.map-flythrough-caption.hidden,
+.map-flythrough-caption[hidden] {
+  display: none !important;
+}
+
 /* Background boundary/metric stages (after overlay dismisses). */
 .map-bg-load {
   position: absolute;

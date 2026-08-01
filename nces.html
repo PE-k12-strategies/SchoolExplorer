@@ -1,3 +1,95 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -284,8 +376,9 @@
         Paste each file in full, then refresh this page.
       </div>
 
-      <div class="map-wrap">
+        <div class="map-wrap">
         <div id="nces-map" class="nces-map"></div>
+        <div class="map-flythrough-caption hidden" id="map-flythrough-caption" hidden aria-live="polite"></div>
 
         <!-- Edge-flush details panel (slides in from the left) -->
         <aside class="map-detail-panel" id="map-detail-panel" aria-label="Feature details">
@@ -486,6 +579,17 @@
                 <button type="button" data-basemap="satellite">Satellite</button>
               </div>
             </details>
+
+            <details class="map-group hidden" id="map-admin-flythrough-group" hidden open>
+              <summary class="map-group-title">Admin demo</summary>
+              <div class="map-flythrough-actions">
+                <button type="button" id="map-flythrough-btn" class="map-flythrough-btn">Play flythrough (30s)</button>
+                <button type="button" id="map-flythrough-stop" class="map-flythrough-btn is-danger" hidden>Stop</button>
+              </div>
+              <p class="map-legend-note" id="map-flythrough-status">
+                Preloads data, then eases US → Maryland → Montgomery → Damascus High → Data
+              </p>
+            </details>
           </div>
 
           <div class="map-resize left" data-resize="left" title="Drag to resize"></div>
@@ -572,6 +676,8 @@
     /** Per-school grade rows from the same RPCs the map detail panel uses. */
     let selectedSchoolGradeRows = [];
     let selectedSchoolGradeKey = null;
+    /** School enrollment/teachers change row for the selected ncessch (change mode). */
+    let selectedSchoolMetricChange = null;
     /** Precomputed school totals when grade-level rows are not loaded (state scope). */
     let schoolEnrollmentTotals = new Map();
     /** Cache key of last successful school-metrics load for the current LEA. */
@@ -1885,13 +1991,19 @@
      * Apply a state / district / school scope picked on the map to both the
      * cascade dropdowns and the main filters, then re-render once.
      */
-    async function selectMapScope({ state = '', leaid = '', school = '' } = {}) {
+    async function selectMapScope({
+      state = '',
+      leaid = '',
+      school = '',
+      openDetail = true,
+    } = {}) {
       const prior = typeof getFilters === 'function' ? getFilters() : {};
       let resolvedLeaid = leaid || '';
       let st = state
         || (resolvedLeaid ? stateFromLeaid(resolvedLeaid) : '')
         || prior.state
         || '';
+      const allowFit = !window.__mapLockCamera && !window.__mapSkipAutoFit;
 
       // School click often arrives with incomplete meta — recover from loaded rows.
       if (school && (!st || !resolvedLeaid)) {
@@ -1911,7 +2023,9 @@
       if (!st) {
         if (school) {
           console.warn('School selected but state could not be resolved', school);
-          window.NcesMap?.focusSchool?.(school, { syncFilters: false, fit: true });
+          if (openDetail !== false) {
+            window.NcesMap?.focusSchool?.(school, { syncFilters: false, fit: allowFit });
+          }
           return;
         }
         return clearMapScopeToNationwide();
@@ -2014,7 +2128,9 @@
           } catch (_) { /* ignore */ }
         }
         if (typeof window.syncMapScopeMode === 'function') window.syncMapScopeMode(getFilters());
-        window.NcesMap?.focusSchool?.(school, { syncFilters: false, fit: true });
+        if (openDetail !== false) {
+          window.NcesMap?.focusSchool?.(school, { syncFilters: false, fit: allowFit });
+        }
         return;
       }
 
@@ -2415,6 +2531,22 @@
 
       function pushChangeYears(opts = {}) {
         if (!window.NcesMap) return;
+        // Admin flythrough keeps 2015→2024 warm so Color-by Enrollment doesn't wipe caches.
+        const locked = window.__mapLockCompareYears;
+        if (Array.isArray(locked) && locked.length >= 2) {
+          const from = Number(locked[0]);
+          const to = Number(locked[1]);
+          if (Number.isFinite(from) && Number.isFinite(to) && from !== to) {
+            savedCompareFrom = from;
+            savedCompareTo = to;
+            if (yearFrom) yearFrom.value = String(from);
+            if (yearTo) yearTo.value = String(to);
+            // Always skipEnsure while locked — preload/warmChangeCaches owns fetches.
+            window.NcesMap.setChangeYears(from, to, { keepCache: true, skipEnsure: true });
+            if (!opts.skipToolbarSync) syncToolbarYearsFromMap([from, to]);
+            return;
+          }
+        }
         if (isMapYearCompareMode()) {
           if (!yearFrom || !yearTo) return;
           const from = Number(yearFrom.value);
@@ -2863,6 +2995,33 @@
 
       document.querySelectorAll('.dual-range').forEach(wireDualRange);
       wirePanelResize();
+
+      // Flythrough / external callers
+      window.applyColorMetric = applyColorMetric;
+      window.setMapCompareYears = function setMapCompareYears(from, to) {
+        const f = Number(from);
+        const t = Number(to);
+        if (!Number.isFinite(f) || !Number.isFinite(t)) return;
+        if (yearFrom) yearFrom.value = String(f);
+        if (yearTo) yearTo.value = String(t);
+        if (yearDisplay) yearDisplay.value = String(t);
+        savedCompareFrom = f;
+        savedCompareTo = t;
+        window.NcesMap?.setChangeYears?.(f, t);
+        syncToolbarYearsFromMap([f, t]);
+        if (typeof updateMapYearCompareUi === 'function') updateMapYearCompareUi();
+      };
+      window.applySchoolMarkerMode = function applySchoolMarkerMode(mode) {
+        if (!schoolFillToggle || !window.NcesMap) return;
+        const value = mode || 'type';
+        schoolFillToggle.querySelectorAll('button').forEach((b) => {
+          b.classList.toggle('is-active', (b.getAttribute('data-school-fill') || '') === value);
+        });
+        window.NcesMap.setSchoolMarkerMode(value);
+        syncSchoolMarkerModeNote(value);
+        if (typeof updateMapYearCompareUi === 'function') updateMapYearCompareUi();
+        updateChangeLegendVisibility();
+      };
     }
 
     function wirePanelResize() {
@@ -3493,35 +3652,115 @@
       pctEl.textContent = formatPct(from, to);
     }
 
+    function setChangePanelHidden(el, hide) {
+      if (!el) return;
+      el.hidden = !!hide;
+      el.classList.toggle('hidden', !!hide);
+    }
+
+    function fillMetricChangeKpis(pair, prefix, fromVal, toVal) {
+      const fromLabel = document.getElementById(`kpi-dist-${prefix}-from-label`);
+      const toLabel = document.getElementById(`kpi-dist-${prefix}-to-label`);
+      const fromEl = document.getElementById(`kpi-dist-${prefix}-from`);
+      const toEl = document.getElementById(`kpi-dist-${prefix}-to`);
+      const deltaEl = document.getElementById(`kpi-dist-${prefix}-delta`);
+      const pctEl = document.getElementById(`kpi-dist-${prefix}-pct`);
+      if (!fromEl || !toEl || !deltaEl || !pctEl) return;
+      if (!pair) {
+        fromEl.textContent = '—';
+        toEl.textContent = '—';
+        deltaEl.textContent = '—';
+        pctEl.textContent = '—';
+        deltaEl.classList.remove('is-up', 'is-down');
+        return;
+      }
+      if (fromLabel) fromLabel.textContent = String(pair.from);
+      if (toLabel) toLabel.textContent = String(pair.to);
+      const from = fromVal == null ? null : Number(fromVal);
+      const to = toVal == null ? null : Number(toVal);
+      const fmt = (v) => (v == null || !Number.isFinite(v)
+        ? '—'
+        : v.toLocaleString(undefined, { maximumFractionDigits: 1 }));
+      fromEl.textContent = fmt(from);
+      toEl.textContent = fmt(to);
+      if (from == null || to == null || !Number.isFinite(from) || !Number.isFinite(to)) {
+        deltaEl.textContent = '—';
+        pctEl.textContent = 'n/a';
+        deltaEl.classList.remove('is-up', 'is-down');
+        return;
+      }
+      const delta = to - from;
+      deltaEl.textContent = formatDelta(delta);
+      deltaEl.classList.toggle('is-up', delta > 0);
+      deltaEl.classList.toggle('is-down', delta < 0);
+      pctEl.textContent = formatPct(from, to);
+    }
+
     function setDistrictChangePanels(pair, distFrom, distTo, opts = {}) {
       const enrollGrid = document.getElementById('district-enroll-change-grid');
       const staffGrid = document.getElementById('district-staff-change-grid');
-      // School focus: hide LEA change panels (trend/grade charts already switch to school).
-      const show = !!pair && !opts.hide;
-      if (enrollGrid) enrollGrid.hidden = !show;
-      if (staffGrid) staffGrid.hidden = !show;
+      const schoolFocus = !!opts.schoolId;
+      const show = !!pair;
+      setChangePanelHidden(enrollGrid, !show);
+      setChangePanelHidden(staffGrid, !show);
       if (!show) return;
 
       const years = activeYears();
       const changeTitle = document.getElementById('district-change-kpi-title');
       if (changeTitle) {
-        changeTitle.textContent = years.length > 2
+        const base = years.length > 2
           ? `Enrollment change (${pair.from} → ${pair.to})`
           : 'Enrollment change';
+        changeTitle.textContent = schoolFocus ? `${base} (school)` : base;
+      }
+
+      let fromEnroll = Number(distFrom) || 0;
+      let toEnroll = Number(distTo) || 0;
+      if (schoolFocus) {
+        const sc = schoolEnrollmentChangeForSelection(years, getFilters());
+        if (sc) {
+          fromEnroll = Number(sc.from) || 0;
+          toEnroll = Number(sc.to) || 0;
+        } else if (selectedSchoolMetricChange) {
+          fromEnroll = Number(selectedSchoolMetricChange.enrollment_from) || 0;
+          toEnroll = Number(selectedSchoolMetricChange.enrollment_to) || 0;
+        }
       }
 
       document.getElementById('kpi-dist-from-label').textContent = String(pair.from);
       document.getElementById('kpi-dist-to-label').textContent = String(pair.to);
-      document.getElementById('kpi-dist-from').textContent = Math.round(distFrom || 0).toLocaleString();
-      document.getElementById('kpi-dist-to').textContent = Math.round(distTo || 0).toLocaleString();
-      const dDelta = (Number(distTo) || 0) - (Number(distFrom) || 0);
+      document.getElementById('kpi-dist-from').textContent = Math.round(fromEnroll).toLocaleString();
+      document.getElementById('kpi-dist-to').textContent = Math.round(toEnroll).toLocaleString();
+      const dDelta = toEnroll - fromEnroll;
       const deltaEl = document.getElementById('kpi-dist-delta');
       deltaEl.textContent = formatDelta(dDelta);
       deltaEl.classList.toggle('is-up', dDelta > 0);
       deltaEl.classList.toggle('is-down', dDelta < 0);
-      document.getElementById('kpi-dist-pct').textContent = formatPct(distFrom, distTo);
-      fillLeaStaffChangeKpis(pair, 'tch', 'teachers_total_fte');
-      fillLeaStaffChangeKpis(pair, 'staff', 'staff_total_fte');
+      document.getElementById('kpi-dist-pct').textContent = formatPct(fromEnroll, toEnroll);
+
+      const tchPanel = staffGrid?.querySelector('section:first-child');
+      const staffPanel = staffGrid?.querySelector('section:last-child');
+      if (schoolFocus) {
+        const m = selectedSchoolMetricChange;
+        fillMetricChangeKpis(
+          pair,
+          'tch',
+          m && m.teachers_from != null ? m.teachers_from : null,
+          m && m.teachers_to != null ? m.teachers_to : null
+        );
+        // CCD has no school-level staff total — hide the district-only panel.
+        if (staffPanel) setChangePanelHidden(staffPanel, true);
+        const tchTitle = tchPanel?.querySelector('.panel-title');
+        if (tchTitle) tchTitle.textContent = 'Teachers FTE change';
+      } else {
+        if (staffPanel) setChangePanelHidden(staffPanel, false);
+        fillLeaStaffChangeKpis(pair, 'tch', 'teachers_total_fte');
+        fillLeaStaffChangeKpis(pair, 'staff', 'staff_total_fte');
+        const tchTitle = tchPanel?.querySelector('.panel-title');
+        const staffTitle = staffPanel?.querySelector('.panel-title');
+        if (tchTitle) tchTitle.textContent = 'Teachers FTE change';
+        if (staffTitle) staffTitle.textContent = 'Staff FTE change';
+      }
     }
 
     function fillDistrictFilter() {
@@ -4351,6 +4590,37 @@
       schools = allSchools;
     }
 
+    /** Older nces_map_state_summary omits FTE — fill from same-year metric_change. */
+    async function enrichStateSummaryWithFte(rows, year) {
+      const list = rows || [];
+      const hasFte = list.some((r) =>
+        (Number(r.teachers_fte) || 0) > 0
+        || (Number(r.staff_fte) || 0) > 0
+        || (Number(r.teachers_to) || 0) > 0
+        || (Number(r.staff_to) || 0) > 0
+      );
+      if (hasFte || !year) return list;
+      try {
+        const fteRows = await fetchRpc('nces_map_state_metric_change', {
+          p_year_from: year,
+          p_year_to: year,
+        });
+        const byCode = new Map((fteRows || []).map((r) => [r.state_code, r]));
+        if (!byCode.size) return list;
+        return list.map((r) => {
+          const m = byCode.get(r.state_code);
+          if (!m) return r;
+          return Object.assign({}, r, {
+            teachers_fte: Number(m.teachers_to) || Number(m.teachers_from) || 0,
+            staff_fte: Number(m.staff_to) || Number(m.staff_from) || 0,
+          });
+        });
+      } catch (err) {
+        console.warn('State FTE enrich failed', err);
+        return list;
+      }
+    }
+
     async function loadScopeOverview(f, { onPartial, quiet = false } = {}) {
       const years = (f.years.length
         ? f.years
@@ -4422,13 +4692,19 @@
         );
 
         const [stateRows] = await Promise.all([statePromise, districtsPromise]);
-        scopeStateSummary = stateRows || [];
-        const teacherSum = scopeDistrictMetrics.reduce(
-          (sum, d) => sum + (Number(d.teachers_fte) || 0),
-          0
-        );
+        // Snapshot path often lacks teachers_fte/staff_fte on older RPCs.
+        scopeStateSummary = pair
+          ? (stateRows || [])
+          : await enrichStateSummaryWithFte(stateRows || [], snapshotYear);
+        const usAgg = aggregateStateSummaryRows(scopeStateSummary);
+        const teacherSum = usAgg.teachers
+          || scopeDistrictMetrics.reduce(
+            (sum, d) => sum + (Number(d.teachers_fte) || 0),
+            0
+          );
         staff = {
           teachers_total_fte: teacherSum || null,
+          staff_total_fte: usAgg.staff || null,
           school_year: pair ? pair.to : snapshotYear,
         };
         if (typeof onPartial === 'function') {
@@ -4815,6 +5091,72 @@
       return `${leaid}|${fetchYears.join(',')}|${pair ? (fetchYears.length > 2 ? 'm' : 'c') : 's'}`;
     }
 
+    function schoolDirTeachersFte(row) {
+      if (!row) return null;
+      if (row.teachers_fte != null && Number.isFinite(Number(row.teachers_fte))) {
+        return Number(row.teachers_fte);
+      }
+      const raw = row.raw_data || {};
+      const candidates = [raw.teachers_fte, raw.teachers, raw.fte_teachers, raw.teacher_fte];
+      for (let i = 0; i < candidates.length; i++) {
+        const n = Number(candidates[i]);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return null;
+    }
+
+    /** Directory fallback when school metric change lacks teachers_from/to. */
+    async function fetchSchoolTeachersChangeFromDirectory(ncessch, pair) {
+      if (!client || !ncessch || !pair) return null;
+      const table = (NCES_CONFIG.tables && NCES_CONFIG.tables.schoolDirectory) || 'nces_school_directory';
+      try {
+        const [fromRes, toRes] = await Promise.all([
+          client
+            .from(table)
+            .select('teachers_fte, raw_data')
+            .eq('ncessch', ncessch)
+            .eq('school_year', pair.from)
+            .maybeSingle(),
+          client
+            .from(table)
+            .select('teachers_fte, raw_data')
+            .eq('ncessch', ncessch)
+            .eq('school_year', pair.to)
+            .maybeSingle(),
+        ]);
+        const tf = schoolDirTeachersFte(fromRes.data);
+        const tt = schoolDirTeachersFte(toRes.data);
+        if (tf == null && tt == null) return null;
+        const from = tf != null ? tf : 0;
+        const to = tt != null ? tt : 0;
+        const delta = to - from;
+        return {
+          teachers_from: from,
+          teachers_to: to,
+          teachers_delta: delta,
+          teachers_pct: from > 0 ? Math.round((delta / from) * 1000) / 10 : null,
+        };
+      } catch (err) {
+        console.warn('School teachers directory fallback failed', err);
+        return null;
+      }
+    }
+
+    async function ensureSelectedSchoolTeachers(metric, ncessch, pair) {
+      const base = metric && typeof metric === 'object' ? { ...metric } : {};
+      const hasTeachers = (Number(base.teachers_from) || 0) > 0
+        || (Number(base.teachers_to) || 0) > 0
+        || base.teachers_from != null
+        || base.teachers_to != null;
+      // Treat both-null / both-zero as missing when enrollment exists (common RPC miss).
+      if (hasTeachers && ((Number(base.teachers_from) || 0) > 0 || (Number(base.teachers_to) || 0) > 0)) {
+        return base;
+      }
+      const dir = await fetchSchoolTeachersChangeFromDirectory(ncessch, pair);
+      if (!dir) return Object.keys(base).length ? base : null;
+      return Object.assign(base, dir);
+    }
+
     /**
      * Same grade RPCs as the map detail panel — per selected school.
      * Fast LEA load only fills district totals / LEA aggregates, so a school pick
@@ -4825,22 +5167,52 @@
       if (!id) {
         selectedSchoolGradeRows = [];
         selectedSchoolGradeKey = null;
+        selectedSchoolMetricChange = null;
         return [];
       }
       const fetchYears = yearsForDataFetch(selectedYears);
-      const key = `${id}|${fetchYears.join(',')}`;
-      if (selectedSchoolGradeKey === key && selectedSchoolGradeRows.length) {
+      // Suffix forces reload after school-metric change was added to this loader.
+      const key = `${id}|${fetchYears.join(',')}|gcm2`;
+      if (
+        selectedSchoolGradeKey === key
+        && selectedSchoolGradeRows.length
+        && (fetchYears.length !== 2 || (
+          selectedSchoolMetricChange
+          && ((Number(selectedSchoolMetricChange.teachers_from) || 0) > 0
+            || (Number(selectedSchoolMetricChange.teachers_to) || 0) > 0)
+        ))
+      ) {
         return selectedSchoolGradeRows;
       }
       const pair = fetchYears.length >= 2 ? changeYearPair(fetchYears) : null;
+      const f = typeof getFilters === 'function' ? getFilters() : {};
       let rows = [];
+      selectedSchoolMetricChange = null;
       try {
         if (pair && fetchYears.length === 2) {
-          const gradeRows = await fetchRpc('nces_map_enrollment_by_grade_change', {
+          const metricArgs = {
             p_year_from: pair.from,
             p_year_to: pair.to,
             p_ncessch: id,
-          });
+          };
+          if (f.leaid) metricArgs.p_leaid = f.leaid;
+          // Prefer LEA scope — statewide + ncessch can miss teachers on older RPCs.
+          const [gradeRows, metricRows] = await Promise.all([
+            fetchRpc('nces_map_enrollment_by_grade_change', {
+              p_year_from: pair.from,
+              p_year_to: pair.to,
+              p_ncessch: id,
+            }),
+            fetchRpc('nces_map_school_metric_change', metricArgs).catch((err) => {
+              console.warn('nces_map_school_metric_change (selected school) failed', err);
+              return [];
+            }),
+          ]);
+          selectedSchoolMetricChange = await ensureSelectedSchoolTeachers(
+            (metricRows && metricRows[0]) || null,
+            id,
+            pair
+          );
           rows = (gradeRows || []).map((r) => {
             const from = Number(r.enrollment_from) || 0;
             const to = Number(r.enrollment_to) || 0;
@@ -4884,6 +5256,25 @@
               enrollment: to,
             };
           });
+          if (pair) {
+            try {
+              const metricArgs = {
+                p_year_from: pair.from,
+                p_year_to: pair.to,
+                p_ncessch: id,
+              };
+              if (f.leaid) metricArgs.p_leaid = f.leaid;
+              const metricRows = await fetchRpc('nces_map_school_metric_change', metricArgs);
+              selectedSchoolMetricChange = await ensureSelectedSchoolTeachers(
+                (metricRows && metricRows[0]) || null,
+                id,
+                pair
+              );
+            } catch (err) {
+              console.warn('nces_map_school_metric_change (multi-year school) failed', err);
+              selectedSchoolMetricChange = await ensureSelectedSchoolTeachers(null, id, pair);
+            }
+          }
         } else {
           const y = fetchYears[0];
           const gradeRows = await fetchRpc('nces_map_enrollment_by_grade', {
@@ -4917,6 +5308,17 @@
           );
         });
       });
+      // Keep School teachers (FTE) KPI filled when directory roster lacked FTE.
+      if (selectedSchoolMetricChange && id) {
+        const tTo = selectedSchoolMetricChange.teachers_to;
+        const tFrom = selectedSchoolMetricChange.teachers_from;
+        const tch = (tTo != null && Number(tTo) > 0) ? Number(tTo)
+          : (tFrom != null ? Number(tFrom) : null);
+        if (tch != null) {
+          const row = schools.find((s) => String(s.ncessch) === id);
+          if (row && !(Number(row.teachers_fte) > 0)) row.teachers_fte = tch;
+        }
+      }
       return selectedSchoolGradeRows;
     }
 
@@ -4941,6 +5343,7 @@
         } else {
           selectedSchoolGradeRows = [];
           selectedSchoolGradeKey = null;
+          selectedSchoolMetricChange = null;
         }
         if (getCurrentDataTab() === 'data') renderAll();
       } finally {
@@ -6075,7 +6478,9 @@
       document.getElementById('kpi-revenue').textContent = formatCurrency(finance?.rev_total);
       document.getElementById('kpi-expenditure').textContent = formatCurrency(finance?.exp_total);
 
-      setDistrictChangePanels(distPair, distFrom, distTo, { hide: !!f.school });
+      setDistrictChangePanels(distPair, distFrom, distTo, {
+        schoolId: f.school || ((f.schools && f.schools.length === 1) ? f.schools[0] : null),
+      });
     }
 
     /** District-wide grade chart for nationwide / state scope (no LEA selected). */
@@ -6494,8 +6899,9 @@
           .sort((a, b) => Number(a.grade) - Number(b.grade));
         let gradeLabels;
         let gradeDatasets;
+        let gradeYearRows = [];
         if (multiYear) {
-          const gradeYearRows = schoolRows.map((r) => {
+          gradeYearRows = schoolRows.map((r) => {
             const byYear = Object.assign({}, r.byYear || {});
             years.forEach((y) => {
               if (byYear[y] == null) {
@@ -6582,9 +6988,12 @@
             },
           });
         }
-        if (charts.districtGradeChange) {
-          charts.districtGradeChange.destroy();
-          charts.districtGradeChange = null;
+        // Bottom change panels: per-grade deltas for the selected school.
+        renderDistrictGradeChangePanel(years, changePair, gradeYearRows);
+        const gradeChangeTitle = document.getElementById('district-grade-change-title');
+        if (gradeChangeTitle && changePair && years.length === 2) {
+          gradeChangeTitle.textContent =
+            `Enrollment by grade (change ${changePair.from} → ${changePair.to}) (school)`;
         }
         return;
       }
@@ -7404,6 +7813,7 @@
             } else {
               selectedSchoolGradeRows = [];
               selectedSchoolGradeKey = null;
+              selectedSchoolMetricChange = null;
             }
             if (!quiet) {
               loadProgressState.done = loadProgressState.total;
@@ -7606,6 +8016,7 @@
         } else {
           selectedSchoolGradeRows = [];
           selectedSchoolGradeKey = null;
+          selectedSchoolMetricChange = null;
         }
 
         if (!quiet) {
@@ -7780,12 +8191,453 @@
 
     let adminPendingTimer = null;
 
+    const FLYTHROUGH = {
+      state: 'MD',
+      leaid: '2400480',
+      school: '240048001455',
+      yearFrom: 2015,
+      yearTo: 2024,
+      // Progressive zooms only — never overshoot (easeTo, not flyTo).
+      views: {
+        us: { center: [-98.5, 39.5], zoom: 3.35 },
+        md: { center: [-76.85, 39.05], zoom: 6.55 },
+        montgomery: { center: [-77.18, 39.14], zoom: 9.5 },
+        schoolZoom: 13.2,
+        schoolFallback: [-77.21056, 39.28194],
+      },
+      // Durations: ease then hold (ms).
+      timing: {
+        usEase: 900,
+        usHold: 3800,
+        mdEase: 5200,
+        mdHold: 3200,
+        leaEase: 4200,
+        leaHold: 2800,
+        schoolEase: 4200,
+        schoolHold: 3200,
+        dataHold: 4200,
+      },
+    };
+
+    let flythroughAbort = null;
+    let flythroughWired = false;
+
+    function setFlythroughUi({ running = false, status = '', caption = '' } = {}) {
+      const btn = document.getElementById('map-flythrough-btn');
+      const stop = document.getElementById('map-flythrough-stop');
+      const statusEl = document.getElementById('map-flythrough-status');
+      const cap = document.getElementById('map-flythrough-caption');
+      if (btn) {
+        btn.disabled = !!running;
+        btn.textContent = running ? 'Playing…' : 'Play flythrough (30s)';
+      }
+      if (stop) stop.hidden = !running;
+      if (statusEl && status) statusEl.textContent = status;
+      if (cap) {
+        const text = caption || '';
+        cap.textContent = text;
+        cap.hidden = !text;
+        cap.classList.toggle('hidden', !text);
+      }
+    }
+
+    function flythroughSleep(ms, signal) {
+      return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'));
+          return;
+        }
+        const t = setTimeout(resolve, ms);
+        const onAbort = () => {
+          clearTimeout(t);
+          reject(new DOMException('Aborted', 'AbortError'));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
+    }
+
+    async function flythroughWaitFor(predicate, { timeoutMs = 12000, intervalMs = 200, signal } = {}) {
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        try {
+          if (await predicate()) return true;
+        } catch (_) { /* keep waiting */ }
+        await flythroughSleep(intervalMs, signal);
+      }
+      return false;
+    }
+
+    async function ensureFlythroughSchoolId() {
+      const loaded = window.NcesMap?.getLoadedSchools?.() || [];
+      const hit = loaded.find((s) => /damascus\s+high/i.test(s.school_name || ''));
+      return hit?.ncessch ? String(hit.ncessch) : FLYTHROUGH.school;
+    }
+
+    function flythroughLockYears() {
+      window.__mapLockCompareYears = [FLYTHROUGH.yearFrom, FLYTHROUGH.yearTo];
+      window.setMapCompareYears?.(FLYTHROUGH.yearFrom, FLYTHROUGH.yearTo);
+      window.NcesMap?.setChangeYears?.(
+        FLYTHROUGH.yearFrom,
+        FLYTHROUGH.yearTo,
+        { keepCache: true, skipEnsure: true }
+      );
+    }
+
+    function flythroughUnlockYears() {
+      window.__mapLockCompareYears = null;
+    }
+
+    function flythroughSetColorMetric(metric) {
+      document.querySelectorAll('.colorby-toggle-states, .colorby-toggle-districts').forEach((group) => {
+        group.querySelectorAll('button[data-metric]').forEach((b) => {
+          b.classList.toggle('is-active', (b.getAttribute('data-metric') || '') === (metric || ''));
+        });
+      });
+      window.NcesMap?.setColorMetric?.(metric || null);
+      flythroughLockYears();
+    }
+
+    function flythroughBeginCameraLock() {
+      if (window.NcesMap?.setCameraLock) window.NcesMap.setCameraLock(true);
+      else {
+        window.__mapLockCamera = true;
+        window.__mapSkipAutoFit = true;
+      }
+      try { window.NcesMap?.closeDetail?.(); } catch (_) { /* ignore */ }
+    }
+
+    function flythroughEndCameraLock() {
+      if (window.NcesMap?.setCameraLock) window.NcesMap.setCameraLock(false);
+      else {
+        window.__mapLockCamera = false;
+        window.__mapSkipAutoFit = false;
+      }
+      flythroughUnlockYears();
+    }
+
+    /** One camera move at a time — never parallel with data loads. */
+    async function flythroughEaseTo(view, durationMs, signal) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (!view?.center || !window.NcesMap?.flyCamera) {
+        await flythroughSleep(durationMs || 0, signal);
+        return;
+      }
+      await window.NcesMap.flyCamera({
+        center: view.center,
+        zoom: view.zoom,
+        duration: durationMs,
+      });
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    }
+
+    async function flythroughWaitMetricIdle(signal, timeoutMs = 15000) {
+      await flythroughWaitFor(() => {
+        const el = document.getElementById('map-metric-load');
+        return !el || el.classList.contains('hidden');
+      }, { timeoutMs, signal });
+    }
+
+    /** Apply map scope/layers with camera frozen. Always finishes before easing. */
+    async function flythroughApplyScene(scene, signal) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      flythroughLockYears();
+      window.NcesMap?.setChangeField?.('enrollment');
+
+      if (scene === 'us') {
+        setMapSchoolsVisible(false, { fromUser: true });
+        window.applySchoolMarkerMode?.('type');
+        await clearMapScopeToNationwide();
+        window.__mapBoundaryChoice = 'states';
+        window.NcesMap?.setBoundaryMode?.('states');
+        flythroughSetColorMetric('enrollment');
+        return;
+      }
+
+      if (scene === 'md') {
+        setMapSchoolsVisible(false, { fromUser: true });
+        window.applySchoolMarkerMode?.('type');
+        await selectMapScope({
+          state: FLYTHROUGH.state,
+          leaid: '',
+          school: '',
+          openDetail: false,
+        });
+        window.__mapBoundaryChoice = 'districts';
+        window.NcesMap?.setBoundaryMode?.('districts');
+        flythroughSetColorMetric('change');
+        setMapSchoolsVisible(false, { fromUser: true });
+        await flythroughWaitMetricIdle(signal);
+        return;
+      }
+
+      if (scene === 'montgomery') {
+        setMapSchoolsVisible(true, { fromUser: true });
+        window.applySchoolMarkerMode?.('change');
+        await selectMapScope({
+          state: FLYTHROUGH.state,
+          leaid: FLYTHROUGH.leaid,
+          school: '',
+          openDetail: false,
+        });
+        setMapSchoolsVisible(true, { fromUser: true });
+        window.applySchoolMarkerMode?.('change');
+        flythroughSetColorMetric('change');
+        window.NcesMap?.setBoundaryMode?.('districts');
+        if (window.NcesMap?.warmChangeCaches) {
+          try { await window.NcesMap.warmChangeCaches(); } catch (_) { /* ignore */ }
+        }
+        await flythroughWaitMetricIdle(signal, 12000);
+        return;
+      }
+
+      if (scene === 'school') {
+        const schoolId = await ensureFlythroughSchoolId();
+        setMapSchoolsVisible(true, { fromUser: true });
+        window.applySchoolMarkerMode?.('change');
+        await selectMapScope({
+          state: FLYTHROUGH.state,
+          leaid: FLYTHROUGH.leaid,
+          school: schoolId,
+          openDetail: false,
+        });
+        try {
+          await loadSelectedSchoolGrades(schoolId, [FLYTHROUGH.yearFrom, FLYTHROUGH.yearTo]);
+        } catch (_) { /* ignore */ }
+        return schoolId;
+      }
+      return null;
+    }
+
+    async function preloadFlythrough(signal) {
+      flythroughBeginCameraLock();
+
+      setFlythroughUi({
+        running: true,
+        status: 'Preloading…',
+        caption: 'Preparing demo — loading data (camera locked)',
+      });
+      if (getCurrentDataTab() !== 'map') {
+        setDataTab('map', { persist: false, rerender: false, initMap: true });
+      }
+      await flythroughWaitFor(() => window.NcesMap?.isReady?.(), { timeoutMs: 20000, signal });
+      await flythroughEaseTo(FLYTHROUGH.views.us, 0, signal);
+
+      // Warm MD change
+      setFlythroughUi({
+        running: true,
+        status: 'Preloading Maryland…',
+        caption: 'Preparing demo · Maryland districts',
+      });
+      await flythroughApplyScene('md', signal);
+      if (window.NcesMap?.warmChangeCaches) {
+        try { await window.NcesMap.warmChangeCaches(); } catch (_) { /* ignore */ }
+      }
+
+      // Warm Montgomery schools
+      setFlythroughUi({
+        running: true,
+        status: 'Preloading Montgomery County…',
+        caption: 'Preparing demo · Montgomery schools',
+      });
+      await flythroughApplyScene('montgomery', signal);
+      try {
+        if (window.NcesMap?.loadSchoolsForScope) {
+          await window.NcesMap.loadSchoolsForScope({
+            state: FLYTHROUGH.state,
+            leaid: FLYTHROUGH.leaid,
+            years: [FLYTHROUGH.yearFrom, FLYTHROUGH.yearTo],
+          });
+        } else {
+          await ensureMapSchoolsForDistrict(FLYTHROUGH.leaid);
+        }
+      } catch (err) {
+        console.warn('Flythrough school preload failed', err);
+      }
+      await flythroughWaitFor(
+        () => (window.NcesMap?.getLoadedSchools?.() || [])
+          .some((s) => sameLeaId(s.leaid, FLYTHROUGH.leaid)),
+        { timeoutMs: 25000, signal }
+      );
+
+      // Warm Damascus + Data tab
+      setFlythroughUi({
+        running: true,
+        status: 'Preloading Damascus High…',
+        caption: 'Preparing demo · Damascus High',
+      });
+      const schoolId = await flythroughApplyScene('school', signal);
+      try {
+        yearFilterTouched = true;
+        window.setMapCompareYears?.(FLYTHROUGH.yearFrom, FLYTHROUGH.yearTo);
+        await loadData({ quiet: true, bustCache: false });
+        chartsDataDirty = false;
+      } catch (err) {
+        console.warn('Flythrough Data-tab preload failed', err);
+        chartsDataDirty = true;
+      }
+
+      // Reset to US visuals; camera still locked on US.
+      setFlythroughUi({
+        running: true,
+        status: 'Starting flythrough…',
+        caption: 'United States · enrollment by state',
+      });
+      try { window.NcesMap?.closeDetail?.(); } catch (_) { /* ignore */ }
+      await flythroughApplyScene('us', signal);
+      await flythroughEaseTo(FLYTHROUGH.views.us, 0, signal);
+
+      return schoolId || FLYTHROUGH.school;
+    }
+
+    async function runAdminFlythrough() {
+      if (flythroughAbort) {
+        flythroughAbort.abort();
+        flythroughAbort = null;
+      }
+      const ac = new AbortController();
+      flythroughAbort = ac;
+      const { signal } = ac;
+      const T = FLYTHROUGH.timing;
+      let schoolId = FLYTHROUGH.school;
+
+      try {
+        schoolId = await preloadFlythrough(signal);
+
+        // 1) Country — already staged
+        setFlythroughUi({
+          running: true,
+          status: 'Step 1/5 · United States',
+          caption: 'United States · enrollment by state',
+        });
+        await flythroughEaseTo(FLYTHROUGH.views.us, T.usEase, signal);
+        await flythroughSleep(T.usHold, signal);
+
+        // 2) Apply MD first, THEN ease country → state
+        setFlythroughUi({
+          running: true,
+          status: 'Step 2/5 · Maryland',
+          caption: 'Maryland · district enrollment change 2015 → 2024',
+        });
+        await flythroughApplyScene('md', signal);
+        await flythroughEaseTo(FLYTHROUGH.views.md, T.mdEase, signal);
+        await flythroughSleep(T.mdHold, signal);
+
+        // 3) Apply Montgomery first, THEN ease state → district
+        setFlythroughUi({
+          running: true,
+          status: 'Step 3/5 · Montgomery County',
+          caption: 'Montgomery County · schools · enrollment change',
+        });
+        await flythroughApplyScene('montgomery', signal);
+        await flythroughEaseTo(FLYTHROUGH.views.montgomery, T.leaEase, signal);
+        await flythroughSleep(T.leaHold, signal);
+
+        // 4) Apply school (no detail yet), THEN ease district → school, THEN open detail
+        setFlythroughUi({
+          running: true,
+          status: 'Step 4/5 · Damascus High',
+          caption: 'Damascus High · enrollment change by grade',
+        });
+        schoolId = (await flythroughApplyScene('school', signal)) || schoolId;
+        const schoolCenter = window.NcesMap?.schoolLngLat?.(schoolId)
+          || FLYTHROUGH.views.schoolFallback;
+        await flythroughEaseTo({
+          center: schoolCenter,
+          zoom: FLYTHROUGH.views.schoolZoom,
+        }, T.schoolEase, signal);
+        window.NcesMap?.focusSchool?.(schoolId, { syncFilters: false, fit: false });
+        await flythroughSleep(T.schoolHold, signal);
+
+        // 5) Data tab — land on enrollment change + grade-change charts
+        setFlythroughUi({
+          running: true,
+          status: 'Step 5/5 · Data tab',
+          caption: 'Data · enrollment change by grade',
+        });
+        yearFilterTouched = true;
+        flythroughLockYears();
+        setDataTab('data', { persist: false, rerender: true, initMap: false });
+        if (typeof renderAll === 'function') {
+          try { renderAll(); } catch (_) { /* ignore */ }
+        }
+        // Wait for the school change panels, then scroll them into view.
+        await flythroughWaitFor(() => {
+          const el = document.getElementById('district-enroll-change-grid');
+          return !!(el && !el.hidden && !el.classList.contains('hidden'));
+        }, { timeoutMs: 8000, signal });
+        await flythroughSleep(250, signal);
+        try {
+          const target = document.getElementById('district-enroll-change-grid')
+            || document.getElementById('chart-district-grade-change');
+          if (target) {
+            // Frame the Enrollment change + grade-change charts (not the top of Data).
+            target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+          }
+        } catch (_) { /* ignore */ }
+        await flythroughSleep(T.dataHold, signal);
+
+        setFlythroughUi({
+          running: false,
+          status: 'Flythrough complete — return to Map anytime.',
+          caption: '',
+        });
+      } catch (err) {
+        if (err?.name === 'AbortError') {
+          setFlythroughUi({
+            running: false,
+            status: 'Flythrough stopped.',
+            caption: '',
+          });
+        } else {
+          console.error('Flythrough failed', err);
+          setFlythroughUi({
+            running: false,
+            status: err?.message || 'Flythrough failed.',
+            caption: '',
+          });
+        }
+      } finally {
+        flythroughEndCameraLock();
+        if (flythroughAbort === ac) flythroughAbort = null;
+      }
+    }
+
+    function stopAdminFlythrough() {
+      if (flythroughAbort) flythroughAbort.abort();
+      flythroughAbort = null;
+      flythroughEndCameraLock();
+      setFlythroughUi({ running: false, status: 'Flythrough stopped.', caption: '' });
+    }
+
+    function setupAdminFlythroughUi(isAdmin) {
+      const group = document.getElementById('map-admin-flythrough-group');
+      if (!group) return;
+      if (!isAdmin) {
+        group.classList.add('hidden');
+        group.hidden = true;
+        stopAdminFlythrough();
+        return;
+      }
+      group.classList.remove('hidden');
+      group.hidden = false;
+      if (flythroughWired) return;
+      flythroughWired = true;
+      document.getElementById('map-flythrough-btn')?.addEventListener('click', () => {
+        runAdminFlythrough();
+      });
+      document.getElementById('map-flythrough-stop')?.addEventListener('click', () => {
+        stopAdminFlythrough();
+      });
+    }
+
     /** Bottom-left admin link — only for ADMIN_EMAIL; amber when pending > 0. */
     function setupAdminApprovalsLink(user) {
       const link = document.getElementById('admin-approvals-link');
       const badge = document.getElementById('admin-pending-badge');
-      if (!link) return;
       const isAdmin = !!(user && window.ADMIN_EMAIL && user.email === window.ADMIN_EMAIL);
+      setupAdminFlythroughUi(isAdmin);
+      if (!link) return;
       if (!isAdmin) {
         link.classList.add('hidden');
         link.hidden = true;
@@ -7964,6 +8816,7 @@
                 } else {
                   selectedSchoolGradeRows = [];
                   selectedSchoolGradeKey = null;
+                  selectedSchoolMetricChange = null;
                 }
                 fillSchoolFilter();
                 renderAll();
@@ -7979,6 +8832,7 @@
         } else {
           selectedSchoolGradeRows = [];
           selectedSchoolGradeKey = null;
+          selectedSchoolMetricChange = null;
           renderAll();
           if (getCurrentDataTab() === 'map') renderMap();
         }

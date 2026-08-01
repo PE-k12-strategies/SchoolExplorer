@@ -1414,7 +1414,8 @@
     if (wrap) wrap.classList.add('has-detail-open');
     if (detailReopen) detailReopen.setAttribute('aria-expanded', 'true');
     applyDetailCameraPadding();
-    if (map) map.resize();
+    // resize() recenters the viewport — skip during flythrough camera lock.
+    if (map && !cameraLocked()) map.resize();
   }
 
   function closeDetail() {
@@ -1424,15 +1425,37 @@
     if (wrap) wrap.classList.remove('has-detail-open');
     if (detailReopen) detailReopen.setAttribute('aria-expanded', 'false');
     applyDetailCameraPadding();
-    if (map) map.resize();
+    if (map && !cameraLocked()) map.resize();
   }
 
   /**
    * Shift the map's visual center so fits / flyTo / pan stay clear of the
    * left details panel (and don't land the selection under it).
    */
+  function cameraLocked() {
+    return !!(global.__mapLockCamera || global.__mapSkipAutoFit);
+  }
+
+  function setCameraLock(on) {
+    global.__mapLockCamera = !!on;
+    global.__mapSkipAutoFit = !!on;
+    if (!map) return;
+    try { map.stop(); } catch (_) { /* ignore */ }
+    // Keep padding zero while locked so opening the detail panel cannot shove the camera.
+    try {
+      if (typeof map.setPadding === 'function') {
+        map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 });
+      }
+    } catch (_) { /* ignore */ }
+  }
+
   function applyDetailCameraPadding() {
     if (!map || typeof map.setPadding !== 'function') return;
+    // Flythrough owns the camera — never shift padding underneath an easeTo.
+    if (cameraLocked()) {
+      try { map.setPadding({ top: 0, bottom: 0, left: 0, right: 0 }); } catch (_) { /* ignore */ }
+      return;
+    }
     try {
       if (detailPanel && detailPanel.classList.contains('is-open')) {
         const w = Math.round(
@@ -1451,6 +1474,108 @@
     return { top: 56, bottom: 56, left: 56, right: 56 };
   }
 
+  /** Build From→To grade rows via two single-year RPCs (district-aware). */
+  async function fetchGradeChangeViaSnapshots(args, leaids) {
+    const yFrom = args.p_year_from;
+    const yTo = args.p_year_to;
+    const ncessch = args.p_ncessch || null;
+    const fetchYear = async (year, leaid) => rpc('nces_map_enrollment_by_grade', {
+      p_leaid: leaid || null,
+      p_ncessch: ncessch,
+      p_year: year,
+    });
+    let fromRows;
+    let toRows;
+    if (leaids.length > 1) {
+      const [fromSets, toSets] = await Promise.all([
+        Promise.all(leaids.map((id) => fetchYear(yFrom, id))),
+        Promise.all(leaids.map((id) => fetchYear(yTo, id))),
+      ]);
+      fromRows = mergeGradeRows(fromSets, false);
+      toRows = mergeGradeRows(toSets, false);
+    } else {
+      const leaid = leaids[0] || args.p_leaid || null;
+      [fromRows, toRows] = await Promise.all([
+        fetchYear(yFrom, leaid),
+        fetchYear(yTo, leaid),
+      ]);
+    }
+    const byGrade = new Map();
+    (fromRows || []).forEach((r) => {
+      const g = Number(r.grade);
+      if (!Number.isFinite(g)) return;
+      byGrade.set(g, {
+        grade: g,
+        enrollment_from: Number(r.enrollment) || 0,
+        enrollment_to: 0,
+      });
+    });
+    (toRows || []).forEach((r) => {
+      const g = Number(r.grade);
+      if (!Number.isFinite(g)) return;
+      const cur = byGrade.get(g) || { grade: g, enrollment_from: 0, enrollment_to: 0 };
+      cur.enrollment_to = Number(r.enrollment) || 0;
+      byGrade.set(g, cur);
+    });
+    return [...byGrade.values()]
+      .map((r) => {
+        const from = Number(r.enrollment_from) || 0;
+        const to = Number(r.enrollment_to) || 0;
+        return {
+          grade: r.grade,
+          enrollment_from: from,
+          enrollment_to: to,
+          enrollment_delta: to - from,
+          enrollment_pct: from > 0 ? Math.round(((to - from) / from) * 1000) / 10 : null,
+        };
+      })
+      .filter((r) => r.enrollment_from > 0 || r.enrollment_to > 0)
+      .sort((a, b) => a.grade - b.grade);
+  }
+
+  function gradeChangeFromLooksEmpty(rows) {
+    const list = rows || [];
+    if (!list.length) return true;
+    const fromTotal = list.reduce((s, r) => s + (Number(r.enrollment_from) || 0), 0);
+    const toTotal = list.reduce((s, r) => s + (Number(r.enrollment_to) || 0), 0);
+    // Change RPC used school enrollment only — From year missing → fake growth.
+    return fromTotal <= 0 && toTotal > 0;
+  }
+
+  async function loadGradeChangeRows(args) {
+    const leaids = (args && args.p_leaids && args.p_leaids.length)
+      ? args.p_leaids
+      : (args && args.p_leaid ? [args.p_leaid] : []);
+    let rows;
+    try {
+      if (leaids.length > 1) {
+        const sets = await Promise.all(leaids.map((id) => rpc('nces_map_enrollment_by_grade_change', {
+          p_year_from: args.p_year_from,
+          p_year_to: args.p_year_to,
+          p_leaid: id,
+          p_ncessch: null,
+        })));
+        rows = mergeGradeRows(sets, true);
+      } else {
+        rows = await rpc('nces_map_enrollment_by_grade_change', {
+          p_year_from: args.p_year_from,
+          p_year_to: args.p_year_to,
+          p_leaid: leaids[0] || args.p_leaid || null,
+          p_ncessch: args.p_ncessch || null,
+        });
+      }
+    } catch (_) {
+      rows = [];
+    }
+    if (gradeChangeFromLooksEmpty(rows)) {
+      try {
+        const rebuilt = await fetchGradeChangeViaSnapshots(args, leaids);
+        if (rebuilt.length) rows = rebuilt;
+      } catch (_) { /* keep original rows */ }
+    }
+    return rows || [];
+  }
+
   async function loadGradeIntoSlot(slot, args) {
     if (!slot || !client) return;
     try {
@@ -1459,23 +1584,7 @@
         : (args && args.p_leaid ? [args.p_leaid] : []);
 
       if (args && args.change) {
-        let rows;
-        if (leaids.length > 1) {
-          const sets = await Promise.all(leaids.map((id) => rpc('nces_map_enrollment_by_grade_change', {
-            p_year_from: args.p_year_from,
-            p_year_to: args.p_year_to,
-            p_leaid: id,
-            p_ncessch: null,
-          })));
-          rows = mergeGradeRows(sets, true);
-        } else {
-          rows = await rpc('nces_map_enrollment_by_grade_change', {
-            p_year_from: args.p_year_from,
-            p_year_to: args.p_year_to,
-            p_leaid: leaids[0] || args.p_leaid || null,
-            p_ncessch: args.p_ncessch || null,
-          });
-        }
+        const rows = await loadGradeChangeRows(args);
         if (slot.isConnected) slot.innerHTML = gradeChangeChartHtml(rows, args.p_year_from, args.p_year_to);
         return;
       }
@@ -1675,8 +1784,8 @@
       const d = Number.isFinite(delta) ? delta : (to - from);
       const sign = d > 0 ? '+' : '';
       const cls = d > 0 ? 'is-up' : d < 0 ? 'is-down' : '';
-      const wFrom = Math.max(2, Math.round((from / max) * 100));
-      const wTo = Math.max(2, Math.round((to / max) * 100));
+      const wFrom = from > 0 ? Math.max(2, Math.round((from / max) * 100)) : 0;
+      const wTo = to > 0 ? Math.max(2, Math.round((to / max) * 100)) : 0;
       return `<div class="map-grade-change-row">`
         + `<span class="map-grade-lbl">${gradeLabel(r.grade)}</span>`
         + `<span class="map-grade-dual">`
@@ -1691,8 +1800,8 @@
     const signTot = dTot > 0 ? '+' : '';
     const clsTot = dTot > 0 ? 'is-up' : dTot < 0 ? 'is-down' : '';
     const scale = Math.max(totalFrom, totalTo, 1);
-    const wFromT = Math.max(2, Math.round((totalFrom / scale) * 100));
-    const wToT = Math.max(2, Math.round((totalTo / scale) * 100));
+    const wFromT = totalFrom > 0 ? Math.max(2, Math.round((totalFrom / scale) * 100)) : 0;
+    const wToT = totalTo > 0 ? Math.max(2, Math.round((totalTo / scale) * 100)) : 0;
     return `<div class="map-grade-chart">`
       + `<div class="map-grade-title">Enrollment by grade (${yearFrom} → ${yearTo})</div>`
       + `<div class="map-grade-legend"><span class="is-from">■ ${yearFrom}</span><span class="is-to">■ ${yearTo}</span></div>`
@@ -1757,23 +1866,7 @@
         ? args.p_leaids
         : (args && args.p_leaid ? [args.p_leaid] : []);
       if (args && args.change) {
-        let rows;
-        if (leaids.length > 1) {
-          const sets = await Promise.all(leaids.map((id) => rpc('nces_map_enrollment_by_grade_change', {
-            p_year_from: args.p_year_from,
-            p_year_to: args.p_year_to,
-            p_leaid: id,
-            p_ncessch: null,
-          })));
-          rows = mergeGradeRows(sets, true);
-        } else {
-          rows = await rpc('nces_map_enrollment_by_grade_change', {
-            p_year_from: args.p_year_from,
-            p_year_to: args.p_year_to,
-            p_leaid: leaids[0] || args.p_leaid || null,
-            p_ncessch: args.p_ncessch || null,
-          });
-        }
+        const rows = await loadGradeChangeRows(args);
         writeGrade(gradeChangeChartHtml(rows, args.p_year_from, args.p_year_to));
         return;
       }
@@ -1822,25 +1915,76 @@
       schoolChangeById[ncessch] = ch;
       return ch;
     };
+    async function teachersFromDirectory() {
+      if (!client) return null;
+      try {
+        const pick = async (year) => {
+          const { data, error } = await client
+            .from('nces_school_directory')
+            .select('teachers_fte, raw_data')
+            .eq('ncessch', ncessch)
+            .eq('school_year', year)
+            .maybeSingle();
+          if (error) throw error;
+          if (!data) return 0;
+          if (data.teachers_fte != null && Number.isFinite(Number(data.teachers_fte))) {
+            return Number(data.teachers_fte);
+          }
+          const raw = data.raw_data || {};
+          const n = Number(raw.teachers_fte ?? raw.teachers ?? raw.fte_teachers);
+          return Number.isFinite(n) ? n : 0;
+        };
+        const [tf, tt] = await Promise.all([
+          pick(changeYears.from),
+          pick(changeYears.to),
+        ]);
+        if (!tf && !tt) return null;
+        return {
+          teachers_from: tf,
+          teachers_to: tt,
+          teachers_delta: tt - tf,
+          teachers_pct: tf > 0 ? Math.round(((tt - tf) / tf) * 1000) / 10 : null,
+        };
+      } catch (_) {
+        return null;
+      }
+    }
+
     try {
       const rows = await rpc('nces_map_school_metric_change', {
         p_year_from: changeYears.from,
         p_year_to: changeYears.to,
         p_state: (lastFilters && lastFilters.state) || null,
-        p_leaid: null,
+        p_leaid: (lastFilters && lastFilters.leaid) || null,
         p_ncessch: ncessch,
       });
       const r = (rows || [])[0];
-      if (!r) return null;
+      if (!r) {
+        const tch = await teachersFromDirectory();
+        return tch ? wrap(tch) : null;
+      }
+      let teachers_from = Number(r.teachers_from) || 0;
+      let teachers_to = Number(r.teachers_to) || 0;
+      let teachers_delta = Number(r.teachers_delta);
+      let teachers_pct = r.teachers_pct != null ? Number(r.teachers_pct) : null;
+      if (!teachers_from && !teachers_to) {
+        const tch = await teachersFromDirectory();
+        if (tch) {
+          teachers_from = tch.teachers_from;
+          teachers_to = tch.teachers_to;
+          teachers_delta = tch.teachers_delta;
+          teachers_pct = tch.teachers_pct;
+        }
+      }
       return wrap({
         enrollment_from: Number(r.enrollment_from) || 0,
         enrollment_to: Number(r.enrollment_to) || 0,
         enrollment_delta: Number(r.enrollment_delta) || 0,
         enrollment_pct: r.enrollment_pct != null ? Number(r.enrollment_pct) : null,
-        teachers_from: Number(r.teachers_from) || 0,
-        teachers_to: Number(r.teachers_to) || 0,
-        teachers_delta: Number(r.teachers_delta) || 0,
-        teachers_pct: r.teachers_pct != null ? Number(r.teachers_pct) : null,
+        teachers_from,
+        teachers_to,
+        teachers_delta: Number.isFinite(teachers_delta) ? teachers_delta : (teachers_to - teachers_from),
+        teachers_pct,
       });
     } catch (_) {
       // Fallback if 009 (5-arg school change) is not installed yet.
@@ -1857,14 +2001,15 @@
         const enrollment_from = sum(fromRows);
         const enrollment_to = sum(toRows);
         const enrollment_delta = enrollment_to - enrollment_from;
-        return wrap({
+        const tch = await teachersFromDirectory();
+        return wrap(Object.assign({
           enrollment_from,
           enrollment_to,
           enrollment_delta,
           enrollment_pct: enrollment_from > 0
             ? Math.round((enrollment_delta / enrollment_from) * 1000) / 10
             : null,
-        });
+        }, tch || {}));
       } catch (__) {
         return null;
       }
@@ -2079,7 +2224,11 @@
       });
     }
     const enroll = Number(p.enrollment) || 0;
-    const teachers = p.teachers_fte != null ? Number(p.teachers_fte) : null;
+    const teachers = p.teachers_fte != null && Number(p.teachers_fte) > 0
+      ? Number(p.teachers_fte)
+      : (p.teachers_to != null && Number(p.teachers_to) > 0
+        ? Number(p.teachers_to)
+        : (p.teachers_fte != null ? Number(p.teachers_fte) : null));
     const ratio = stuTeacher(enroll, teachers);
     const year = resolveMetricYear();
     const yFrom = changeYears.from;
@@ -2731,7 +2880,10 @@
 
     // Single school: keep school detail in the left panel.
     if (schoolIds.length === 1) {
-      if (focusSchool(schoolIds[0], { syncFilters: false, fit: true })) return;
+      if (focusSchool(schoolIds[0], {
+        syncFilters: false,
+        fit: autoFitAllowed(),
+      })) return;
     }
     lastSchoolDetail = null;
 
@@ -3109,15 +3261,20 @@
    * Enrollment comes from nces_map_state_summary; teachers/staff often do not
    * (older RPC without FTE columns, or empty teachers_total_fte). Change Color-by
    * works because it uses nces_map_state_metric_change — reuse that for FTE.
+   * Also fills landing-page US detail (Teachers / Staff / Stud-teacher).
    */
-  async function ensureStateFteMetrics() {
+  async function ensureStateFteMetrics(opts = {}) {
     if (!client || !map) return;
     const year = resolveMetricYear();
     const key = String(year);
+    const needsColor = colorMetric === 'teachers'
+      || colorMetric === 'staff'
+      || colorMetric === 'ratio';
+    const showLoad = !opts.quiet && needsColor;
     if (stateSummaryHasFte()) {
       if (stateFteLoadKey !== key) stateFteLoadKey = key;
       applyStateMetrics();
-      if (colorMetric === 'teachers' || colorMetric === 'staff' || colorMetric === 'ratio') {
+      if (needsColor) {
         applyMetricPaint();
         applyVisibility();
       }
@@ -3125,12 +3282,14 @@
     }
     if (stateFteLoading) return;
     stateFteLoading = true;
-    const metricLabel = (COLOR_METRICS[colorMetric] && COLOR_METRICS[colorMetric].label) || 'metrics';
-    setMetricLoad({
-      active: true,
-      title: `Loading ${metricLabel}`,
-      label: `Retrieving state ${metricLabel.toLowerCase()} for ${year}…`,
-    });
+    const metricLabel = (COLOR_METRICS[colorMetric] && COLOR_METRICS[colorMetric].label) || 'staffing';
+    if (showLoad) {
+      setMetricLoad({
+        active: true,
+        title: `Loading ${metricLabel}`,
+        label: `Retrieving state ${metricLabel.toLowerCase()} for ${year}…`,
+      });
+    }
     try {
       let rows = null;
       try {
@@ -3168,13 +3327,17 @@
       });
       stateFteLoadKey = key;
       applyStateMetrics();
-      if (colorMetric === 'teachers' || colorMetric === 'staff' || colorMetric === 'ratio') {
+      if (needsColor) {
         applyMetricPaint();
         applyVisibility();
       }
+      // Refresh landing US panel (or open selection) now that FTE exists.
+      if (!selectedDistricts.size) {
+        presentSelectionDetail(map ? map.getCenter() : null);
+      }
     } finally {
       stateFteLoading = false;
-      setMetricLoad({ active: false });
+      if (showLoad) setMetricLoad({ active: false });
     }
   }
 
@@ -3547,7 +3710,7 @@
     if (typeof opts.onSchoolsLoaded === 'function') {
       try { opts.onSchoolsLoaded(out, { status: schoolLoadStatus }); } catch (_) { /* ignore */ }
     }
-    if (optsPublish && optsPublish.fit) {
+    if (optsPublish && optsPublish.fit && autoFitAllowed()) {
       try { fitToSchoolScope(out); } catch (_) { /* ignore */ }
     }
     try { pushFilteredStatus(); } catch (_) { /* ignore */ }
@@ -3577,7 +3740,7 @@
       ? { lng: Number(row.longitude), lat: Number(row.latitude) }
       : (map ? map.getCenter() : null);
     schoolPopup(p, lngLat, { syncFilters: o.syncFilters === true });
-    if (o.fit !== false && row.longitude != null && row.latitude != null) {
+    if (o.fit !== false && autoFitAllowed() && row.longitude != null && row.latitude != null) {
       try { fitTo(schoolsToFc([row]), 14); } catch (_) { /* ignore */ }
     }
     return true;
@@ -4106,7 +4269,8 @@
     }
   }
 
-  function setChangeYears(fromYear, toYear) {
+  function setChangeYears(fromYear, toYear, yearOpts) {
+    const o = yearOpts || {};
     const from = Number(fromYear);
     const to = Number(toYear);
     if (!Number.isFinite(from) || !Number.isFinite(to)) return;
@@ -4117,10 +4281,18 @@
     const same = next.from === changeYears.from && next.to === changeYears.to;
     if (!same) {
       changeYears = next;
-      changeKey = null; // force reload
-      changeByLeaid = {};
-      schoolChangeKey = null;
-      Object.keys(schoolChangeById).forEach((k) => { delete schoolChangeById[k]; });
+      // Flythrough / warm paths can keep a prior cache while the year UI flickers.
+      if (!o.keepCache) {
+        changeKey = null; // force reload
+        changeByLeaid = {};
+        schoolChangeKey = null;
+        Object.keys(schoolChangeById).forEach((k) => { delete schoolChangeById[k]; });
+      }
+    }
+    if (o.skipEnsure) {
+      refreshOpenDetail();
+      if (opts.onChangeYears) opts.onChangeYears(getChangeYears());
+      return;
     }
     if (next.from === next.to) {
       if (isChangeMetric(colorMetric)) {
@@ -4139,6 +4311,26 @@
     }
     refreshOpenDetail();
     if (opts.onChangeYears) opts.onChangeYears(getChangeYears());
+  }
+
+  /** Await district + school change RPCs (used by admin flythrough preload). */
+  async function warmChangeCaches() {
+    if (changeYears.from == null || changeYears.to == null || changeYears.from === changeYears.to) {
+      return { change: false, schools: false };
+    }
+    await ensureChangeMetrics();
+    await ensureSchoolChangeMetrics();
+    // ensure* may early-return and schedule a retry while boundaries load.
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      const changeReady = !!changeKey && !changeLoading;
+      const schoolReady = !showSchoolChangeRings() || !!schoolChangeKey;
+      if (changeReady && schoolReady) break;
+      await new Promise((r) => setTimeout(r, 200));
+      if (!changeKey && !changeLoading) await ensureChangeMetrics();
+      if (showSchoolChangeRings() && !schoolChangeKey) await ensureSchoolChangeMetrics();
+    }
+    return { change: !!changeKey, schools: !!schoolChangeKey };
   }
 
   // Optional: align map From/To with dashboard year checkboxes (explicit UI sync only).
@@ -5357,6 +5549,76 @@
     return !!schoolTypeRing;
   }
 
+  function schoolDirEnrollment(row) {
+    if (!row) return 0;
+    const raw = row.raw_data || {};
+    const fromRaw = Number(raw.enrollment != null ? raw.enrollment : raw.enrollment_fall_school);
+    if (Number.isFinite(fromRaw) && fromRaw > 0) return fromRaw;
+    return Number(row.enrollment) || 0;
+  }
+
+  /** Page school directory rows for one year (enrollment lives in raw_data for CCD). */
+  async function fetchSchoolDirectoryYear(year, { state, leaid } = {}) {
+    if (!client || !Number.isFinite(Number(year))) return [];
+    const pageSize = 1000;
+    const out = [];
+    let fromIdx = 0;
+    for (;;) {
+      let q = client
+        .from('nces_school_directory')
+        .select('ncessch, leaid, school_name, teachers_fte, raw_data')
+        .eq('school_year', year)
+        .order('ncessch', { ascending: true })
+        .range(fromIdx, fromIdx + pageSize - 1);
+      if (leaid) q = q.eq('leaid', leaid);
+      else if (state) q = q.eq('state_location', state);
+      const { data, error } = await q;
+      if (error) throw error;
+      const chunk = data || [];
+      out.push(...chunk);
+      if (chunk.length < pageSize) break;
+      fromIdx += pageSize;
+      if (fromIdx > 200000) break;
+    }
+    return out;
+  }
+
+  function buildSchoolChangeFromSnapshots(fromRows, toRows) {
+    const fromMap = new Map((fromRows || []).map((r) => [String(r.ncessch), r]));
+    const toMap = new Map((toRows || []).map((r) => [String(r.ncessch), r]));
+    const ids = new Set([...fromMap.keys(), ...toMap.keys()]);
+    return [...ids].map((id) => {
+      const a = fromMap.get(id);
+      const b = toMap.get(id);
+      const ef = schoolDirEnrollment(a);
+      const et = schoolDirEnrollment(b);
+      const tf = Number(a?.teachers_fte) || 0;
+      const tt = Number(b?.teachers_fte) || 0;
+      return {
+        ncessch: id,
+        enrollment_from: ef,
+        enrollment_to: et,
+        enrollment_delta: et - ef,
+        enrollment_pct: ef ? ((et - ef) / ef) * 100 : null,
+        teachers_from: tf,
+        teachers_to: tt,
+        teachers_delta: tt - tf,
+        teachers_pct: tf ? ((tt - tf) / tf) * 100 : null,
+      };
+    }).filter((r) =>
+      r.enrollment_from > 0 || r.enrollment_to > 0
+      || r.teachers_from > 0 || r.teachers_to > 0
+    );
+  }
+
+  function schoolChangeFromLooksEmpty(rows) {
+    const list = rows || [];
+    if (!list.length) return true;
+    const fromTotal = list.reduce((s, r) => s + (Number(r.enrollment_from) || 0), 0);
+    const toTotal = list.reduce((s, r) => s + (Number(r.enrollment_to) || 0), 0);
+    return fromTotal <= 0 && toTotal > 0;
+  }
+
   async function ensureSchoolChangeMetrics() {
     if (!client) return;
     if (!lastFilters || !lastFilters.state) return;
@@ -5392,7 +5654,7 @@
       label: `Retrieving ${changeFieldMeta().label.toLowerCase()} change ${from} → ${to}…`,
     });
     try {
-      let rows;
+      let rows = [];
       try {
         const args = {
           p_year_from: from,
@@ -5402,36 +5664,34 @@
         if (leaid) args.p_leaid = leaid;
         rows = await rpc('nces_map_school_metric_change', args);
       } catch (err) {
-        console.warn('nces_map_school_metric_change failed; using per-year school points', err);
-        const pointArgs = { p_state: state, p_year: from };
-        if (leaid) pointArgs.p_leaid = leaid;
-        const [fromRows, toRows] = await Promise.all([
-          rpc('nces_map_school_points', pointArgs),
-          rpc('nces_map_school_points', { ...pointArgs, p_year: to }),
-        ]);
-        const fromMap = new Map((fromRows || []).map((r) => [r.ncessch, r]));
-        const toMap = new Map((toRows || []).map((r) => [r.ncessch, r]));
-        const ids = new Set([...fromMap.keys(), ...toMap.keys()]);
-        rows = [...ids].map((id) => {
-          const a = fromMap.get(id);
-          const b = toMap.get(id);
-          const ef = Number(a?.enrollment) || 0;
-          const et = Number(b?.enrollment) || 0;
-          const tf = Number(a?.teachers_fte) || 0;
-          const tt = Number(b?.teachers_fte) || 0;
-          return {
-            ncessch: id,
-            enrollment_from: ef,
-            enrollment_to: et,
-            enrollment_delta: et - ef,
-            enrollment_pct: ef ? ((et - ef) / ef) * 100 : null,
-            teachers_from: tf,
-            teachers_to: tt,
-            teachers_delta: tt - tf,
-            teachers_pct: tf ? ((tt - tf) / tf) * 100 : null,
-          };
-        });
+        console.warn('nces_map_school_metric_change failed; using per-year snapshots', err);
+        rows = [];
       }
+
+      // Early years often lack school_enrollment rows — From=0 looks like growth.
+      // Rebuild from directory (raw_data.enrollment) and/or school_points.
+      if (schoolChangeFromLooksEmpty(rows)) {
+        try {
+          const pointArgs = { p_state: state, p_year: from };
+          if (leaid) pointArgs.p_leaid = leaid;
+          const [fromPts, toPts] = await Promise.all([
+            rpc('nces_map_school_points', pointArgs).catch(() => []),
+            rpc('nces_map_school_points', { ...pointArgs, p_year: to }).catch(() => []),
+          ]);
+          let rebuilt = buildSchoolChangeFromSnapshots(fromPts, toPts);
+          if (schoolChangeFromLooksEmpty(rebuilt)) {
+            const [fromDir, toDir] = await Promise.all([
+              fetchSchoolDirectoryYear(from, { state, leaid }),
+              fetchSchoolDirectoryYear(to, { state, leaid }),
+            ]);
+            rebuilt = buildSchoolChangeFromSnapshots(fromDir, toDir);
+          }
+          if (rebuilt.length) rows = rebuilt;
+        } catch (err) {
+          console.warn('School change snapshot rebuild failed', err);
+        }
+      }
+
       schoolChangeById = {};
       (rows || []).forEach((r) => {
         schoolChangeById[r.ncessch] = {
@@ -5475,7 +5735,12 @@
     return has ? b : null;
   }
 
+  function autoFitAllowed() {
+    return !cameraLocked();
+  }
+
   function fitTo(fc, maxZoom) {
+    if (!autoFitAllowed()) return;
     const b = boundsOfFc(fc);
     if (!b || !map) return;
     applyDetailCameraPadding();
@@ -5487,13 +5752,64 @@
   }
 
   function flyToCenter(center, zoom, duration) {
+    if (!autoFitAllowed()) return;
     if (!map || !center) return;
     applyDetailCameraPadding();
-    map.flyTo({
+    map.easeTo({
       center,
       zoom: zoom == null ? map.getZoom() : zoom,
       duration: duration == null ? 700 : duration,
+      essential: true,
     });
+  }
+
+  /**
+   * Smooth camera move for demos. Uses easeTo (not flyTo) so zoom never
+   * overshoots past the target and snaps back.
+   */
+  function flyCamera({ center, zoom, duration } = {}) {
+    if (!map || !center) return Promise.resolve();
+    try { map.stop(); } catch (_) { /* ignore */ }
+    const ms = duration == null ? 2000 : Math.max(0, Number(duration) || 0);
+    const z = zoom == null ? map.getZoom() : Number(zoom);
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try { map.off('moveend', finish); } catch (_) { /* ignore */ }
+        resolve();
+      };
+      if (ms <= 0) {
+        try {
+          map.jumpTo({ center, zoom: z, bearing: 0, pitch: 0 });
+        } catch (_) { /* ignore */ }
+        resolve();
+        return;
+      }
+      map.once('moveend', finish);
+      try {
+        map.easeTo({
+          center,
+          zoom: z,
+          bearing: 0,
+          pitch: 0,
+          duration: ms,
+          easing: (t) => 1 - ((1 - t) ** 3),
+          essential: true,
+        });
+      } catch (_) {
+        finish();
+        return;
+      }
+      setTimeout(finish, ms + 120);
+    });
+  }
+
+  function schoolLngLat(ncessch) {
+    const row = (lastData.schools || []).find((s) => String(s.ncessch) === String(ncessch));
+    if (!row || row.longitude == null || row.latitude == null) return null;
+    return [Number(row.longitude), Number(row.latitude)];
   }
 
   const TIGER = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb';
@@ -5824,6 +6140,9 @@
       // enrollment / teachers / staff / ratio color the whole country (change
       // already merges late via ensureChangeMetrics).
       applyStateMetrics();
+      if (!stateSummaryHasFte() && Object.keys(stateSummaryByCode).length) {
+        ensureStateFteMetrics({ quiet: true }).catch(() => {});
+      }
       if (colorMetric && !isChangeMetric(colorMetric)) {
         applyMetricPaint();
         applyVisibility();
@@ -6364,7 +6683,7 @@
               notes: ['Loading detailed outlines…'],
             });
           }
-          if (!opt.skipFit && !filters.leaid && STATE_CENTROIDS[filters.state]) {
+          if (!opt.skipFit && autoFitAllowed() && !filters.leaid && STATE_CENTROIDS[filters.state]) {
             flyToCenter(STATE_CENTROIDS[filters.state], 6, 500);
           }
         }
@@ -6396,6 +6715,11 @@
       });
       // Merge metrics onto the state polygons for the state-level choropleth.
       applyStateMetrics();
+      // Older nces_map_state_summary omits FTE — fill Teachers/Staff/ratio for
+      // landing Color-by and the US detail panel (quiet unless Color-by needs it).
+      if (!stateSummaryHasFte()) {
+        ensureStateFteMetrics({ quiet: true }).catch(() => {});
+      }
       // Load real per-state completeness (cheap) so nationwide status can show
       // synced/total districts without requiring a state pick.
       await ensureStateCompleteness();
@@ -6500,7 +6824,7 @@
         if (opts.onStatus) opts.onStatus(early);
       }
       // Fit to the state as soon as outlines are ready (don't wait on ~9k schools).
-      if (!opt.skipFit && !filters.leaid) {
+      if (!opt.skipFit && autoFitAllowed() && !filters.leaid) {
         let earlyBoundary = emptyFc();
         if (allStatesFc.features.length) {
           earlyBoundary = {
@@ -6627,7 +6951,7 @@
     Object.assign(status, filtered);
 
     // Fit bounds to the most specific scope available (unless a silent refresh).
-    if (opt.skipFit) return status;
+    if (opt.skipFit || !autoFitAllowed()) return status;
     const selectedSchool = filters.school
       ? (lastData.schools || []).find((r) => String(r.ncessch) === String(filters.school))
       : null;
@@ -6800,6 +7124,12 @@
     setChangeYears,
     setChangeField,
     getChangeYears,
+    warmChangeCaches,
+    setCameraLock,
+    closeDetail,
+    openDetail,
+    flyCamera,
+    schoolLngLat,
     getLoadedSchools: () => (lastData.schools || []).slice(),
     setSchools,
     focusSchool,
