@@ -583,11 +583,30 @@
             <details class="map-group hidden" id="map-admin-flythrough-group" hidden open>
               <summary class="map-group-title">Admin demo</summary>
               <div class="map-flythrough-actions">
-                <button type="button" id="map-flythrough-btn" class="map-flythrough-btn">Play flythrough (30s)</button>
-                <button type="button" id="map-flythrough-stop" class="map-flythrough-btn is-danger" hidden>Stop</button>
+                <button type="button" id="map-flythrough-btn" class="map-flythrough-btn">Play flythrough</button>
+              </div>
+              <div class="map-flythrough-panel-transport" id="map-flythrough-panel-transport" hidden>
+                <div class="map-flythrough-transport-row">
+                  <button type="button" class="map-flythrough-btn" id="map-flythrough-back" title="Back 3 seconds">◀◀</button>
+                  <button type="button" class="map-flythrough-btn" id="map-flythrough-playpause">Pause</button>
+                  <button type="button" class="map-flythrough-btn is-danger" id="map-flythrough-stop">Stop</button>
+                  <span class="map-flythrough-time" id="map-flythrough-time">0:00 / 0:30</span>
+                </div>
+                <label class="map-flythrough-slider-label">
+                  <span class="visually-hidden">Timeline</span>
+                  <input type="range" id="map-flythrough-slider" min="0" max="1000" value="0" step="1">
+                </label>
+                <div class="map-flythrough-rates" id="map-flythrough-rates" role="group" aria-label="Playback speed">
+                  <button type="button" data-rate="0.5">0.5×</button>
+                  <button type="button" data-rate="0.8">0.8×</button>
+                  <button type="button" data-rate="1" class="is-active">1×</button>
+                  <button type="button" data-rate="1.3">1.3×</button>
+                  <button type="button" data-rate="1.5">1.5×</button>
+                  <button type="button" data-rate="2">2×</button>
+                </div>
               </div>
               <p class="map-legend-note" id="map-flythrough-status">
-                Preloads data, then eases US → Maryland → Montgomery → Damascus High → Data
+                Preloads data, then US → Maryland → Montgomery → Damascus High → Data. Use speed + slider while playing.
               </p>
             </details>
           </div>
@@ -8197,15 +8216,15 @@
       school: '240048001455',
       yearFrom: 2015,
       yearTo: 2024,
-      // Progressive zooms only — never overshoot (easeTo, not flyTo).
+      rates: [0.5, 0.8, 1, 1.3, 1.5, 2],
       views: {
         us: { center: [-98.5, 39.5], zoom: 3.35 },
         md: { center: [-76.85, 39.05], zoom: 6.55 },
         montgomery: { center: [-77.18, 39.14], zoom: 9.5 },
-        schoolZoom: 13.2,
+        // High enough for auto-satellite layer to be fully opaque on campus.
+        schoolZoom: 14.5,
         schoolFallback: [-77.21056, 39.28194],
       },
-      // Durations: ease then hold (ms).
       timing: {
         usEase: 900,
         usHold: 3800,
@@ -8219,19 +8238,76 @@
       },
     };
 
-    let flythroughAbort = null;
+    const flyPlayer = {
+      active: false,
+      playing: false,
+      rate: 1,
+      t: 0,
+      total: 0,
+      segs: [],
+      schoolId: FLYTHROUGH.school,
+      schoolView: null,
+      lastScene: null,
+      detailOpen: false,
+      dataScrolled: false,
+      sceneBusy: false,
+      seeking: false,
+      raf: 0,
+      lastTs: 0,
+      abort: null,
+    };
     let flythroughWired = false;
 
-    function setFlythroughUi({ running = false, status = '', caption = '' } = {}) {
+    function flyFmtTime(ms) {
+      const s = Math.max(0, Math.floor(Number(ms) / 1000));
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return `${m}:${String(r).padStart(2, '0')}`;
+    }
+
+    function flyLerp(a, b, u) {
+      return a + (b - a) * u;
+    }
+
+    function flyEaseOut(u) {
+      const t = Math.min(1, Math.max(0, u));
+      return 1 - ((1 - t) ** 3);
+    }
+
+    function openFlythroughControlsPanel() {
+      const header = document.getElementById('map-panel-toggle');
+      const body = document.getElementById('map-panel-body');
+      const group = document.getElementById('map-admin-flythrough-group');
+      if (header && body) {
+        header.setAttribute('aria-expanded', 'true');
+        body.classList.remove('collapsed');
+      }
+      if (group) {
+        group.hidden = false;
+        group.classList.remove('hidden');
+        group.open = true;
+      }
+    }
+
+    function setFlythroughUi({
+      running = false,
+      status = '',
+      caption = '',
+      transport = false,
+    } = {}) {
       const btn = document.getElementById('map-flythrough-btn');
-      const stop = document.getElementById('map-flythrough-stop');
       const statusEl = document.getElementById('map-flythrough-status');
       const cap = document.getElementById('map-flythrough-caption');
+      const panelTransport = document.getElementById('map-flythrough-panel-transport');
       if (btn) {
-        btn.disabled = !!running;
-        btn.textContent = running ? 'Playing…' : 'Play flythrough (30s)';
+        btn.hidden = !!transport;
+        btn.disabled = !!running && !transport;
+        btn.textContent = running && !transport ? 'Preparing…' : 'Play flythrough';
       }
-      if (stop) stop.hidden = !running;
+      if (panelTransport) {
+        panelTransport.hidden = !transport;
+        if (transport) openFlythroughControlsPanel();
+      }
       if (statusEl && status) statusEl.textContent = status;
       if (cap) {
         const text = caption || '';
@@ -8239,6 +8315,27 @@
         cap.hidden = !text;
         cap.classList.toggle('hidden', !text);
       }
+      const pp = document.getElementById('map-flythrough-playpause');
+      if (pp) pp.textContent = flyPlayer.playing ? 'Pause' : 'Play';
+    }
+
+    function updateFlythroughClockUi() {
+      const total = flyPlayer.total || 1;
+      const t = Math.min(total, Math.max(0, flyPlayer.t));
+      const pct = Math.round((t / total) * 1000);
+      const label = `${flyFmtTime(t)} / ${flyFmtTime(total)}`;
+      const el = document.getElementById('map-flythrough-slider');
+      if (el && document.activeElement !== el) el.value = String(pct);
+      const timeEl = document.getElementById('map-flythrough-time');
+      if (timeEl) timeEl.textContent = label;
+    }
+
+    function setFlythroughRate(rate) {
+      const next = FLYTHROUGH.rates.includes(Number(rate)) ? Number(rate) : 1;
+      flyPlayer.rate = next;
+      document.querySelectorAll('#map-flythrough-rates button').forEach((b) => {
+        b.classList.toggle('is-active', Number(b.getAttribute('data-rate')) === next);
+      });
     }
 
     function flythroughSleep(ms, signal) {
@@ -8316,7 +8413,6 @@
       flythroughUnlockYears();
     }
 
-    /** One camera move at a time — never parallel with data loads. */
     async function flythroughEaseTo(view, durationMs, signal) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       if (!view?.center || !window.NcesMap?.flyCamera) {
@@ -8338,23 +8434,30 @@
       }, { timeoutMs, signal });
     }
 
-    /** Apply map scope/layers with camera frozen. Always finishes before easing. */
     async function flythroughApplyScene(scene, signal) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       flythroughLockYears();
       window.NcesMap?.setChangeField?.('enrollment');
 
       if (scene === 'us') {
+        if (getCurrentDataTab() !== 'map') {
+          setDataTab('map', { persist: false, rerender: false, initMap: true });
+        }
         setMapSchoolsVisible(false, { fromUser: true });
         window.applySchoolMarkerMode?.('type');
         await clearMapScopeToNationwide();
         window.__mapBoundaryChoice = 'states';
         window.NcesMap?.setBoundaryMode?.('states');
         flythroughSetColorMetric('enrollment');
+        try { window.NcesMap?.closeDetail?.(); } catch (_) { /* ignore */ }
+        flyPlayer.detailOpen = false;
         return;
       }
 
       if (scene === 'md') {
+        if (getCurrentDataTab() !== 'map') {
+          setDataTab('map', { persist: false, rerender: false, initMap: true });
+        }
         setMapSchoolsVisible(false, { fromUser: true });
         window.applySchoolMarkerMode?.('type');
         await selectMapScope({
@@ -8367,11 +8470,16 @@
         window.NcesMap?.setBoundaryMode?.('districts');
         flythroughSetColorMetric('change');
         setMapSchoolsVisible(false, { fromUser: true });
+        try { window.NcesMap?.closeDetail?.(); } catch (_) { /* ignore */ }
+        flyPlayer.detailOpen = false;
         await flythroughWaitMetricIdle(signal);
         return;
       }
 
       if (scene === 'montgomery') {
+        if (getCurrentDataTab() !== 'map') {
+          setDataTab('map', { persist: false, rerender: false, initMap: true });
+        }
         setMapSchoolsVisible(true, { fromUser: true });
         window.applySchoolMarkerMode?.('change');
         await selectMapScope({
@@ -8384,6 +8492,8 @@
         window.applySchoolMarkerMode?.('change');
         flythroughSetColorMetric('change');
         window.NcesMap?.setBoundaryMode?.('districts');
+        try { window.NcesMap?.closeDetail?.(); } catch (_) { /* ignore */ }
+        flyPlayer.detailOpen = false;
         if (window.NcesMap?.warmChangeCaches) {
           try { await window.NcesMap.warmChangeCaches(); } catch (_) { /* ignore */ }
         }
@@ -8391,8 +8501,12 @@
         return;
       }
 
-      if (scene === 'school') {
+      if (scene === 'school' || scene === 'data') {
+        if (scene === 'school' && getCurrentDataTab() !== 'map') {
+          setDataTab('map', { persist: false, rerender: false, initMap: true });
+        }
         const schoolId = await ensureFlythroughSchoolId();
+        flyPlayer.schoolId = schoolId;
         setMapSchoolsVisible(true, { fromUser: true });
         window.applySchoolMarkerMode?.('change');
         await selectMapScope({
@@ -8404,16 +8518,293 @@
         try {
           await loadSelectedSchoolGrades(schoolId, [FLYTHROUGH.yearFrom, FLYTHROUGH.yearTo]);
         } catch (_) { /* ignore */ }
+        // Campus view: satellite imagery under labels (opacity ramps with zoom).
+        try { window.NcesMap?.ensureAutoSatelliteLayer?.(); } catch (_) { /* ignore */ }
+
+        if (scene === 'school') {
+          // Detail opens only after the school ease completes (handled by timeline).
+          return schoolId;
+        }
+
+        // Data scene
+        yearFilterTouched = true;
+        flythroughLockYears();
+        setDataTab('data', { persist: false, rerender: true, initMap: false });
+        if (typeof renderAll === 'function') {
+          try { renderAll(); } catch (_) { /* ignore */ }
+        }
+        await flythroughWaitFor(() => {
+          const el = document.getElementById('district-enroll-change-grid');
+          return !!(el && !el.hidden && !el.classList.contains('hidden'));
+        }, { timeoutMs: 8000, signal });
+        if (!flyPlayer.dataScrolled) {
+          flyPlayer.dataScrolled = true;
+          try {
+            const target = document.getElementById('district-enroll-change-grid')
+              || document.getElementById('chart-district-grade-change');
+            if (target) {
+              target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+            }
+          } catch (_) { /* ignore */ }
+        }
         return schoolId;
       }
       return null;
     }
 
-    async function preloadFlythrough(signal) {
-      flythroughBeginCameraLock();
+    function buildFlyTimeline(schoolView) {
+      const T = FLYTHROUGH.timing;
+      const V = FLYTHROUGH.views;
+      const segs = [];
+      let cursor = 0;
+      const add = (seg) => {
+        const row = Object.assign({}, seg, {
+          start: cursor,
+          end: cursor + seg.duration,
+        });
+        cursor = row.end;
+        segs.push(row);
+      };
+      add({
+        id: 'us-ease', kind: 'ease', scene: 'us', detail: false,
+        from: V.us, to: V.us, duration: T.usEase,
+        caption: 'United States · enrollment by state',
+        status: 'United States',
+      });
+      add({
+        id: 'us-hold', kind: 'hold', scene: 'us', detail: false,
+        view: V.us, duration: T.usHold,
+        caption: 'United States · enrollment by state',
+        status: 'United States',
+      });
+      add({
+        id: 'md-ease', kind: 'ease', scene: 'md', detail: false,
+        from: V.us, to: V.md, duration: T.mdEase,
+        caption: 'Maryland · district enrollment change 2015 → 2024',
+        status: 'Maryland',
+      });
+      add({
+        id: 'md-hold', kind: 'hold', scene: 'md', detail: false,
+        view: V.md, duration: T.mdHold,
+        caption: 'Maryland · district enrollment change 2015 → 2024',
+        status: 'Maryland',
+      });
+      add({
+        id: 'lea-ease', kind: 'ease', scene: 'montgomery', detail: false,
+        from: V.md, to: V.montgomery, duration: T.leaEase,
+        caption: 'Montgomery County · schools · enrollment change',
+        status: 'Montgomery County',
+      });
+      add({
+        id: 'lea-hold', kind: 'hold', scene: 'montgomery', detail: false,
+        view: V.montgomery, duration: T.leaHold,
+        caption: 'Montgomery County · schools · enrollment change',
+        status: 'Montgomery County',
+      });
+      add({
+        id: 'school-ease', kind: 'ease', scene: 'school', detail: false,
+        from: V.montgomery, to: schoolView, duration: T.schoolEase,
+        caption: 'Damascus High · enrollment change by grade',
+        status: 'Damascus High',
+      });
+      add({
+        id: 'school-hold', kind: 'hold', scene: 'school', detail: true,
+        view: schoolView, duration: T.schoolHold,
+        caption: 'Damascus High · enrollment change by grade',
+        status: 'Damascus High',
+      });
+      add({
+        id: 'data-hold', kind: 'hold', scene: 'data', detail: true,
+        view: schoolView, duration: T.dataHold,
+        caption: 'Data · enrollment change by grade',
+        status: 'Data tab',
+      });
+      return { segs, total: cursor };
+    }
 
+    function flySegmentAt(t) {
+      const segs = flyPlayer.segs;
+      if (!segs.length) return null;
+      const x = Math.min(flyPlayer.total, Math.max(0, t));
+      for (let i = 0; i < segs.length; i++) {
+        if (x < segs[i].end || i === segs.length - 1) return segs[i];
+      }
+      return segs[segs.length - 1];
+    }
+
+    function flyViewAt(t) {
+      const seg = flySegmentAt(t);
+      if (!seg) return FLYTHROUGH.views.us;
+      if (seg.kind === 'ease' && seg.from && seg.to) {
+        const u = flyEaseOut((t - seg.start) / Math.max(1, seg.duration));
+        return {
+          center: [
+            flyLerp(seg.from.center[0], seg.to.center[0], u),
+            flyLerp(seg.from.center[1], seg.to.center[1], u),
+          ],
+          zoom: flyLerp(seg.from.zoom, seg.to.zoom, u),
+        };
+      }
+      return seg.view || seg.to || FLYTHROUGH.views.us;
+    }
+
+    function flyJumpCamera(view) {
+      if (!view?.center || !window.NcesMap?.flyCamera) return;
+      window.NcesMap.flyCamera({
+        center: view.center,
+        zoom: view.zoom,
+        duration: 0,
+      });
+    }
+
+    async function flyEnsureScene(seg, signal) {
+      if (!seg) return;
+      if (flyPlayer.lastScene === seg.scene) {
+        if (seg.detail && !flyPlayer.detailOpen && seg.scene === 'school') {
+          window.NcesMap?.focusSchool?.(flyPlayer.schoolId, { syncFilters: false, fit: false });
+          flyPlayer.detailOpen = true;
+        }
+        return;
+      }
+      flyPlayer.sceneBusy = true;
+      try {
+        setFlythroughUi({
+          running: true,
+          transport: true,
+          status: seg.status,
+          caption: seg.caption,
+        });
+        if (seg.scene === 'data') flyPlayer.dataScrolled = false;
+        await flythroughApplyScene(seg.scene, signal);
+        flyPlayer.lastScene = seg.scene;
+        if (seg.detail) {
+          window.NcesMap?.focusSchool?.(flyPlayer.schoolId, { syncFilters: false, fit: false });
+          flyPlayer.detailOpen = true;
+        } else if (flyPlayer.detailOpen && seg.scene !== 'data') {
+          try { window.NcesMap?.closeDetail?.(); } catch (_) { /* ignore */ }
+          flyPlayer.detailOpen = false;
+        }
+      } finally {
+        flyPlayer.sceneBusy = false;
+      }
+    }
+
+    function flyStopLoop() {
+      if (flyPlayer.raf) {
+        cancelAnimationFrame(flyPlayer.raf);
+        flyPlayer.raf = 0;
+      }
+    }
+
+    function flyTick(now) {
+      if (!flyPlayer.active) return;
+      if (!flyPlayer.lastTs) flyPlayer.lastTs = now;
+      const dt = Math.min(100, now - flyPlayer.lastTs);
+      flyPlayer.lastTs = now;
+
+      if (flyPlayer.playing && !flyPlayer.seeking && !flyPlayer.sceneBusy) {
+        flyPlayer.t = Math.min(flyPlayer.total, flyPlayer.t + (dt * flyPlayer.rate));
+      }
+
+      const seg = flySegmentAt(flyPlayer.t);
+      if (seg && flyPlayer.lastScene !== seg.scene && !flyPlayer.sceneBusy) {
+        const signal = flyPlayer.abort?.signal;
+        flyEnsureScene(seg, signal).then(() => {
+          if (!flyPlayer.active) return;
+          flyJumpCamera(flyViewAt(flyPlayer.t));
+          updateFlythroughClockUi();
+        }).catch((err) => {
+          if (err?.name !== 'AbortError') console.warn('Flythrough scene failed', err);
+        });
+      } else if (seg?.detail && !flyPlayer.detailOpen && seg.scene === 'school' && !flyPlayer.sceneBusy) {
+        window.NcesMap?.focusSchool?.(flyPlayer.schoolId, { syncFilters: false, fit: false });
+        flyPlayer.detailOpen = true;
+      }
+
+      if (!flyPlayer.sceneBusy) {
+        flyJumpCamera(flyViewAt(flyPlayer.t));
+        if (seg) {
+          setFlythroughUi({
+            running: true,
+            transport: true,
+            status: seg.status,
+            caption: seg.caption,
+          });
+        }
+      }
+      updateFlythroughClockUi();
+
+      if (flyPlayer.t >= flyPlayer.total && !flyPlayer.sceneBusy) {
+        flyPlayer.playing = false;
+        setFlythroughUi({
+          running: true,
+          transport: true,
+          status: 'Flythrough complete — scrub back or Stop',
+          caption: 'Data · enrollment change by grade',
+        });
+        return;
+      }
+      flyPlayer.raf = requestAnimationFrame(flyTick);
+    }
+
+    function flyStartLoop() {
+      flyStopLoop();
+      flyPlayer.lastTs = 0;
+      flyPlayer.raf = requestAnimationFrame(flyTick);
+    }
+
+    async function flySeekTo(ms, { resume = null } = {}) {
+      if (!flyPlayer.active) return;
+      const wasPlaying = flyPlayer.playing;
+      flyPlayer.seeking = true;
+      flyPlayer.playing = false;
+      flyPlayer.t = Math.min(flyPlayer.total, Math.max(0, Number(ms) || 0));
+      const seg = flySegmentAt(flyPlayer.t);
+      try {
+        await flyEnsureScene(seg, flyPlayer.abort?.signal);
+        flyJumpCamera(flyViewAt(flyPlayer.t));
+      } catch (err) {
+        if (err?.name !== 'AbortError') console.warn('Flythrough seek failed', err);
+      }
+      flyPlayer.seeking = false;
+      updateFlythroughClockUi();
+      const shouldPlay = resume == null ? wasPlaying : !!resume;
+      flyPlayer.playing = shouldPlay;
       setFlythroughUi({
         running: true,
+        transport: true,
+        status: seg?.status || '',
+        caption: seg?.caption || '',
+      });
+      if (shouldPlay) flyStartLoop();
+    }
+
+    function flyTogglePlayPause() {
+      if (!flyPlayer.active) return;
+      if (!flyPlayer.playing && flyPlayer.t >= flyPlayer.total - 20) {
+        flySeekTo(0, { resume: true });
+        return;
+      }
+      flyPlayer.playing = !flyPlayer.playing;
+      setFlythroughUi({
+        running: true,
+        transport: true,
+        status: flySegmentAt(flyPlayer.t)?.status || '',
+        caption: flySegmentAt(flyPlayer.t)?.caption || '',
+      });
+      if (flyPlayer.playing) flyStartLoop();
+      else flyStopLoop();
+    }
+
+    function flyBack(seconds = 3) {
+      flySeekTo(flyPlayer.t - (seconds * 1000));
+    }
+
+    async function preloadFlythrough(signal) {
+      flythroughBeginCameraLock();
+      setFlythroughUi({
+        running: true,
+        transport: false,
         status: 'Preloading…',
         caption: 'Preparing demo — loading data (camera locked)',
       });
@@ -8421,9 +8812,9 @@
         setDataTab('map', { persist: false, rerender: false, initMap: true });
       }
       await flythroughWaitFor(() => window.NcesMap?.isReady?.(), { timeoutMs: 20000, signal });
+      try { window.NcesMap?.ensureAutoSatelliteLayer?.(); } catch (_) { /* ignore */ }
       await flythroughEaseTo(FLYTHROUGH.views.us, 0, signal);
 
-      // Warm MD change
       setFlythroughUi({
         running: true,
         status: 'Preloading Maryland…',
@@ -8434,7 +8825,6 @@
         try { await window.NcesMap.warmChangeCaches(); } catch (_) { /* ignore */ }
       }
 
-      // Warm Montgomery schools
       setFlythroughUi({
         running: true,
         status: 'Preloading Montgomery County…',
@@ -8460,7 +8850,6 @@
         { timeoutMs: 25000, signal }
       );
 
-      // Warm Damascus + Data tab
       setFlythroughUi({
         running: true,
         status: 'Preloading Damascus High…',
@@ -8477,7 +8866,6 @@
         chartsDataDirty = true;
       }
 
-      // Reset to US visuals; camera still locked on US.
       setFlythroughUi({
         running: true,
         status: 'Starting flythrough…',
@@ -8486,106 +8874,50 @@
       try { window.NcesMap?.closeDetail?.(); } catch (_) { /* ignore */ }
       await flythroughApplyScene('us', signal);
       await flythroughEaseTo(FLYTHROUGH.views.us, 0, signal);
-
       return schoolId || FLYTHROUGH.school;
     }
 
     async function runAdminFlythrough() {
-      if (flythroughAbort) {
-        flythroughAbort.abort();
-        flythroughAbort = null;
-      }
+      stopAdminFlythrough();
       const ac = new AbortController();
-      flythroughAbort = ac;
+      flyPlayer.abort = ac;
       const { signal } = ac;
-      const T = FLYTHROUGH.timing;
-      let schoolId = FLYTHROUGH.school;
 
       try {
-        schoolId = await preloadFlythrough(signal);
-
-        // 1) Country — already staged
-        setFlythroughUi({
-          running: true,
-          status: 'Step 1/5 · United States',
-          caption: 'United States · enrollment by state',
-        });
-        await flythroughEaseTo(FLYTHROUGH.views.us, T.usEase, signal);
-        await flythroughSleep(T.usHold, signal);
-
-        // 2) Apply MD first, THEN ease country → state
-        setFlythroughUi({
-          running: true,
-          status: 'Step 2/5 · Maryland',
-          caption: 'Maryland · district enrollment change 2015 → 2024',
-        });
-        await flythroughApplyScene('md', signal);
-        await flythroughEaseTo(FLYTHROUGH.views.md, T.mdEase, signal);
-        await flythroughSleep(T.mdHold, signal);
-
-        // 3) Apply Montgomery first, THEN ease state → district
-        setFlythroughUi({
-          running: true,
-          status: 'Step 3/5 · Montgomery County',
-          caption: 'Montgomery County · schools · enrollment change',
-        });
-        await flythroughApplyScene('montgomery', signal);
-        await flythroughEaseTo(FLYTHROUGH.views.montgomery, T.leaEase, signal);
-        await flythroughSleep(T.leaHold, signal);
-
-        // 4) Apply school (no detail yet), THEN ease district → school, THEN open detail
-        setFlythroughUi({
-          running: true,
-          status: 'Step 4/5 · Damascus High',
-          caption: 'Damascus High · enrollment change by grade',
-        });
-        schoolId = (await flythroughApplyScene('school', signal)) || schoolId;
+        const schoolId = await preloadFlythrough(signal);
+        flyPlayer.schoolId = schoolId;
         const schoolCenter = window.NcesMap?.schoolLngLat?.(schoolId)
           || FLYTHROUGH.views.schoolFallback;
-        await flythroughEaseTo({
+        flyPlayer.schoolView = {
           center: schoolCenter,
           zoom: FLYTHROUGH.views.schoolZoom,
-        }, T.schoolEase, signal);
-        window.NcesMap?.focusSchool?.(schoolId, { syncFilters: false, fit: false });
-        await flythroughSleep(T.schoolHold, signal);
-
-        // 5) Data tab — land on enrollment change + grade-change charts
+        };
+        const timeline = buildFlyTimeline(flyPlayer.schoolView);
+        flyPlayer.segs = timeline.segs;
+        flyPlayer.total = timeline.total;
+        flyPlayer.t = 0;
+        flyPlayer.lastScene = 'us';
+        flyPlayer.detailOpen = false;
+        flyPlayer.dataScrolled = false;
+        flyPlayer.active = true;
+        flyPlayer.playing = true;
+        flyPlayer.seeking = false;
+        flyPlayer.sceneBusy = false;
+        setFlythroughRate(flyPlayer.rate || 1);
         setFlythroughUi({
           running: true,
-          status: 'Step 5/5 · Data tab',
-          caption: 'Data · enrollment change by grade',
+          transport: true,
+          status: 'United States',
+          caption: 'United States · enrollment by state',
         });
-        yearFilterTouched = true;
-        flythroughLockYears();
-        setDataTab('data', { persist: false, rerender: true, initMap: false });
-        if (typeof renderAll === 'function') {
-          try { renderAll(); } catch (_) { /* ignore */ }
-        }
-        // Wait for the school change panels, then scroll them into view.
-        await flythroughWaitFor(() => {
-          const el = document.getElementById('district-enroll-change-grid');
-          return !!(el && !el.hidden && !el.classList.contains('hidden'));
-        }, { timeoutMs: 8000, signal });
-        await flythroughSleep(250, signal);
-        try {
-          const target = document.getElementById('district-enroll-change-grid')
-            || document.getElementById('chart-district-grade-change');
-          if (target) {
-            // Frame the Enrollment change + grade-change charts (not the top of Data).
-            target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-          }
-        } catch (_) { /* ignore */ }
-        await flythroughSleep(T.dataHold, signal);
-
-        setFlythroughUi({
-          running: false,
-          status: 'Flythrough complete — return to Map anytime.',
-          caption: '',
-        });
+        updateFlythroughClockUi();
+        flyJumpCamera(FLYTHROUGH.views.us);
+        flyStartLoop();
       } catch (err) {
         if (err?.name === 'AbortError') {
           setFlythroughUi({
             running: false,
+            transport: false,
             status: 'Flythrough stopped.',
             caption: '',
           });
@@ -8593,21 +8925,37 @@
           console.error('Flythrough failed', err);
           setFlythroughUi({
             running: false,
+            transport: false,
             status: err?.message || 'Flythrough failed.',
             caption: '',
           });
         }
-      } finally {
         flythroughEndCameraLock();
-        if (flythroughAbort === ac) flythroughAbort = null;
+        flyPlayer.active = false;
+        flyPlayer.abort = null;
       }
     }
 
     function stopAdminFlythrough() {
-      if (flythroughAbort) flythroughAbort.abort();
-      flythroughAbort = null;
+      flyStopLoop();
+      if (flyPlayer.abort) {
+        try { flyPlayer.abort.abort(); } catch (_) { /* ignore */ }
+      }
+      flyPlayer.abort = null;
+      flyPlayer.active = false;
+      flyPlayer.playing = false;
+      flyPlayer.seeking = false;
+      flyPlayer.sceneBusy = false;
+      flyPlayer.t = 0;
+      flyPlayer.lastScene = null;
       flythroughEndCameraLock();
-      setFlythroughUi({ running: false, status: 'Flythrough stopped.', caption: '' });
+      setFlythroughUi({
+        running: false,
+        transport: false,
+        status: 'Flythrough stopped.',
+        caption: '',
+      });
+      updateFlythroughClockUi();
     }
 
     function setupAdminFlythroughUi(isAdmin) {
@@ -8623,12 +8971,52 @@
       group.hidden = false;
       if (flythroughWired) return;
       flythroughWired = true;
+
       document.getElementById('map-flythrough-btn')?.addEventListener('click', () => {
+        openFlythroughControlsPanel();
         runAdminFlythrough();
       });
-      document.getElementById('map-flythrough-stop')?.addEventListener('click', () => {
-        stopAdminFlythrough();
+      document.getElementById('map-flythrough-stop')?.addEventListener('click', () => stopAdminFlythrough());
+      document.getElementById('map-flythrough-playpause')?.addEventListener('click', flyTogglePlayPause);
+      document.getElementById('map-flythrough-back')?.addEventListener('click', () => flyBack(3));
+
+      const slider = document.getElementById('map-flythrough-slider');
+      if (slider) {
+        let scrubWasPlaying = false;
+        slider.addEventListener('pointerdown', () => {
+          scrubWasPlaying = flyPlayer.playing;
+          flyPlayer.seeking = true;
+          flyPlayer.playing = false;
+        });
+        slider.addEventListener('input', () => {
+          if (!flyPlayer.active) return;
+          const pct = Number(slider.value) / 1000;
+          flyPlayer.t = pct * flyPlayer.total;
+          flyJumpCamera(flyViewAt(flyPlayer.t));
+          const seg = flySegmentAt(flyPlayer.t);
+          if (seg) {
+            setFlythroughUi({
+              running: true,
+              transport: true,
+              status: seg.status,
+              caption: seg.caption,
+            });
+          }
+          updateFlythroughClockUi();
+        });
+        slider.addEventListener('change', () => {
+          if (!flyPlayer.active) return;
+          const pct = Number(slider.value) / 1000;
+          flySeekTo(pct * flyPlayer.total, { resume: scrubWasPlaying });
+        });
+      }
+
+      document.getElementById('map-flythrough-rates')?.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('[data-rate]');
+        if (!btn) return;
+        setFlythroughRate(btn.getAttribute('data-rate'));
       });
+      setFlythroughRate(1);
     }
 
     /** Bottom-left admin link — only for ADMIN_EMAIL; amber when pending > 0. */

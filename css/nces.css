@@ -2711,6 +2711,78 @@ body.is-resizing-detail .map-detail-panel {
   display: none !important;
 }
 
+.map-flythrough-panel-transport[hidden] {
+  display: none !important;
+}
+
+.map-flythrough-panel-transport {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.map-flythrough-transport-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-flythrough-time {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.map-flythrough-slider-label {
+  display: block;
+  width: 100%;
+}
+
+.map-flythrough-slider-label input[type="range"] {
+  width: 100%;
+  accent-color: #0f4c81;
+  cursor: pointer;
+}
+
+.map-flythrough-rates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.map-flythrough-rates button {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.map-flythrough-rates button.is-active {
+  border-color: #0f4c81;
+  background: #e8f1f8;
+  color: #0f4c81;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Background boundary/metric stages (after overlay dismisses). */
 .map-bg-load {
   position: absolute;

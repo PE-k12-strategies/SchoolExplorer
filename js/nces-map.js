@@ -6997,9 +6997,9 @@
   let currentBasemap = 'light';
   const AUTO_SAT_SOURCE = 'nces-auto-satellite';
   const AUTO_SAT_LAYER = 'nces-auto-satellite-fill';
-  /** Short light→satellite crossfade (less muddy overlap while zooming in). */
-  const AUTO_SAT_ZOOM_START = 13.2;
-  const AUTO_SAT_ZOOM_END = 13.9;
+  /** Light→satellite crossfade while zooming in (school / campus views). */
+  const AUTO_SAT_ZOOM_START = 11.6;
+  const AUTO_SAT_ZOOM_END = 13.8;
 
   /**
    * Raster satellite under street labels; opacity rises with zoom.
@@ -7147,6 +7147,7 @@
     getSchoolTypeRing,
     setSizeRange,
     setBasemap,
+    ensureAutoSatelliteLayer,
     clearSelection,
     presentFilterScope,
     getSelection,
